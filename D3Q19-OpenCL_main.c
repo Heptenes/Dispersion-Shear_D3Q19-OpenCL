@@ -1,5 +1,5 @@
 
-#include "header.h"
+#include "D3Q19-OpenCL_header.h"
 
 int main(int argc, char *argv[])
 {  
