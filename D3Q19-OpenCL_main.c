@@ -22,8 +22,12 @@ int main(int argc, char *argv[])
     error_check(error, "clCreateCommandQueue", 1);
 	
 	// Test devices
-	vecadd_test(10000, &devices[0], &queueCPU, &context);
-	vecadd_test(10000, &devices[1], &queueGPU, &context);
+	vecadd_test(10, &devices[0], &queueCPU, &context);
+	vecadd_test(10, &devices[1], &queueGPU, &context);
+	
+	
+	// Run LB calculation 
+	int returnLB = LB_main(devices, &queueCPU, &context);
 	
 	
 	
@@ -32,6 +36,50 @@ int main(int argc, char *argv[])
 	clReleaseCommandQueue(queueGPU);
 	clReleaseContext(context);
 	
+	return 0;
+}
+
+int LB_main(cl_device_id* devicePtr, cl_command_queue* queuePtr, cl_context* contextPtr)
+{
+	
+	// Initialise parameter structs 
+	int_param_struct intParams;
+	float_param_struct floatParams;
+	
+	initialize_data(&intParams, &floatParams);
+	
+	// Build LB kernels
+	//read_program_source(&programSource, programName);
+	
+	return 0;
+}
+
+int initialize_data(int_param_struct* intParams, float_param_struct* floatParams)
+{
+	// Const data
+	const int basisVelD3Q19[19][3] = { { 0, 0, 0}, 
+	{ 1, 0, 0}, {-1, 0, 0}, { 0, 1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1},
+	{ 1, 1, 0}, { 1,-1, 0}, { 1, 0, 1}, { 1, 0,-1},
+	{-1, 1, 0}, {-1,-1, 0}, {-1, 0, 1}, {-1, 0,-1},
+	{ 0, 1, 1}, { 0, 1,-1}, { 0,-1, 1}, { 0,-1,-1} };
+	
+	const float eqWeightsD3Q19[19] = {1./3., 
+	1./18., 1./18., 1./18., 1./18., 1./18., 1./18., 
+	1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36.};
+	
+	memcpy(intParams->basisVel, basisVelD3Q19, sizeof(basisVelD3Q19));
+	memcpy(floatParams->eqWeights, eqWeightsD3Q19, sizeof(eqWeightsD3Q19));
+	
+	// Variable/input data
+	FILE *ifp;
+	ifp = fopen("input_file.txt", "r");
+	
+	
+	
+	
+	intParams->boundaryConds[1] = 1;
+	
+	fclose(ifp);
 	return 0;
 }
 
@@ -182,8 +230,8 @@ void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queuePtr, 
     A = (cl_int*)malloc(dataSize);
     B = (cl_int*)malloc(dataSize);
     C = (cl_int*)malloc(dataSize);
-    // Initialize the input data
 	
+    // Initialize the input data
     for(int i=0; i<size; i++)
 	{
         A[i] = i;
