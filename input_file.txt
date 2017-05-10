@@ -1,1 +1,7 @@
-body_force 1.0 0.0 0.0
+constant_body_force 1.0 0.0 0.0
+viscosity_model 0
+lattice_size 16 16 16
+initial_f zero_vel
+boundary_conditions_xyz 0 0 1
+velocity_bc_upper 0.0 0.0 0.0
+velocity_bc_lower 0.0 0.0 0.0

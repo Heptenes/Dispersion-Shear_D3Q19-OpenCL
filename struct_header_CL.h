@@ -12,25 +12,25 @@ typedef struct {
 
 typedef struct {
 
-	cl_int BasisVel[19][3];
+	int BasisVel[19][3];
 	
-	cl_int MaxIterations;
+	int MaxIterations;
 	
-	cl_int LatticeSize[3];
+	int LatticeSize[3];
 	
-	cl_int BoundaryConds[6];
+	int BoundaryConds[6];
   
-    cl_int ViscosityModel;
+    int ViscosityModel;
 	
 } int_param_struct;
 
 
 typedef struct {
 	
-    cl_float ConstBodyForce[3];
-	cl_float EqWeights[19]; 
-	cl_float VelUpper[3];
-	cl_float VelLower[3];
+    float ConstBodyForce[3];
+	float EqWeights[19]; 
+	float VelUpper[3];
+	float VelLower[3];
   
 } float_param_struct;
 
