@@ -23,7 +23,9 @@
 
 #include "struct_header.h"
 
-int LB_main(cl_device_id* devicePtr, cl_command_queue* queuePtr, cl_context* contextPtr);
+int LB_main(cl_device_id* devices, 
+	cl_command_queue* queueCPU, cl_command_queue* queueGPU, 
+	cl_context* contextPtr);
 	
 int initialize_data(int_param_struct* intParams, float_param_struct* floatParams,
 	host_param_struct* hostParams);

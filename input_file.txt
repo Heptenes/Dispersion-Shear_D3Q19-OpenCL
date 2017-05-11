@@ -1,3 +1,5 @@
+iterations 10
+console_print_freq 10
 constant_body_force 1.0 0.0 0.0
 viscosity_model 0
 lattice_size 16 16 16

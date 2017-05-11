@@ -26,7 +26,7 @@ int main(int argc, char *argv[])
 	vecadd_test(10, &devices[1], &queueGPU, &context);
 	
 	// Run LB calculation 
-	int returnLB = LB_main(devices, &queueCPU, &context);
+	int returnLB = LB_main(devices, &queueCPU, &queueGPU, &context);
 	
 	// Clean-up
 	clReleaseCommandQueue(queueCPU);
@@ -36,9 +36,10 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-int LB_main(cl_device_id* devices, cl_command_queue* queuePtr, cl_context* contextPtr)
+int LB_main(cl_device_id* devices, 
+	cl_command_queue* queueCPU, cl_command_queue* queueGPU, 
+	cl_context* contextPtr)
 {
-	
 	// Initialise parameter structs 
 	int_param_struct intDat;
 	float_param_struct flpDat;
@@ -70,18 +71,59 @@ int LB_main(cl_device_id* devices, cl_command_queue* queuePtr, cl_context* conte
     fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
 	fB_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
 	//
-	cl_mem intDat_cl, flpDat_cl;
-
 	
-	// --- MAIN LOOP ------------------------
-	for (int t=0; t<intDat.MaxIterations; t++) {
+	cl_mem intDat_cl, flpDat_cl;
+	
+	// --- KERNEL QUEUE SETTINGS -------------------------------------------------
+	// Offset global id by 1, because of buffer layer
+	int global_work_offset[3] = {1, 1, 1}; // Perf test this
+	
+	// --- MAIN LOOP -------------------------------------------------------------
+	cl_int error_main; 
+	printf("%s %d\n", "Starting iteration 1, maximum iterations", intDat.MaxIterations);
+	for (int t=1; t<=intDat.MaxIterations; t++) {
 		
+		int toPrint = (t%hostDat.consolePrintFreq == 0) ? 1 : 0;
+		
+		if (toPrint) {
+			printf("%s %d\n", "Starting iteration", t);
+		}
+		
+		// Switch f buffers
+		if (t%2 == 0) {
+		    error_main  = clSetKernelArg(kernelGPU[0], 0, sizeof(cl_mem), &fA_cl);
+		    error_main |= clSetKernelArg(kernelGPU[0], 1, sizeof(cl_mem), &fB_cl);
+			//error_check(error_main, "clSetKernelArg", 1);
+		}
+		else {
+		    error_main  = clSetKernelArg(kernelGPU[0], 0, sizeof(cl_mem), &fB_cl);
+		    error_main |= clSetKernelArg(kernelGPU[0], 1, sizeof(cl_mem), &fA_cl);
+			//error_check(error_main, "clSetKernelArg", 1);
+		}
 
-		// Switch f arrays
+	    /*clEnqueueNDRangeKernel (	cl_command_queue command_queue,
+	    	kernelGPU[0],
+	    	3,
+	    	global_work_offset,
+		
+	    	global_work_size,
+	    	local_work_size,
+	    	0, NULL, NULL)*/
+		
+		//clFinish(*queueGPU);
 
 	}
-		
 	
+	// Cleanup
+	clReleaseKernel(kernelCPU[0]);
+	//clReleaseKernel(kernelCPU[1]);
+	clReleaseKernel(kernelGPU[0]);
+	clReleaseKernel(kernelGPU[1]);
+	clReleaseMemObject(fA_cl);
+	clReleaseMemObject(fB_cl);
+	//clReleaseMemObject(intDat_cl);
+	//clReleaseMemObject(flpDat_cl);
+		
 	return 0;
 }
 
@@ -124,17 +166,21 @@ int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, cl_kernel* 
 	error_check(error, "cclBuildProgram GPU", 1);
 	
 	// Select kernels from program
-	kernelCPU[1] = clCreateKernel(programCPU, "CPU_sphere_collide", &error);
+	kernelCPU[0] = clCreateKernel(programCPU, "CPU_sphere_collide", &error);
 	if (!error_check(error, "clCreateKernel CPU", 1))		
 		print_program_build_log(&programCPU, &devices[0]);
 	
-	kernelGPU[1] = clCreateKernel(programGPU, "GPU_newtonian_collide_stream_D3Q19_SRT", &error);
+	kernelGPU[0] = clCreateKernel(programGPU, "GPU_newtonian_collide_stream_D3Q19_SRT", &error);
 	if (!error_check(error, "clCreateKernel GPU 1", 1))		
 		print_program_build_log(&programGPU, &devices[1]);
 	
-	kernelGPU[2] = clCreateKernel(programGPU, "GPU_boundary_velocity", &error);
+	kernelGPU[1] = clCreateKernel(programGPU, "GPU_boundary_velocity", &error);
 	if (!error_check(error, "clCreateKernel GPU 2", 1))		
 		print_program_build_log(&programGPU, &devices[1]);
+	
+	
+	clReleaseProgram(programCPU);
+	clReleaseProgram(programGPU);
 	
 	return 0;
 }
@@ -176,6 +222,7 @@ host_param_struct* hostDat)
 	
 	input_data_struct inputDefaults[] = {
 		{"iterations", TYPE_INT, &(intDat->MaxIterations), "1000"},
+		{"console_print_freq", TYPE_INT, &(hostDat->consolePrintFreq), "10"},
 		{"constant_body_force", TYPE_FLOAT_3VEC, &(flpDat->ConstBodyForce), "0.0 0.0 0.0"},
 		{"viscosity_model", TYPE_INT, &(intDat->ViscosityModel), "0"},
 		{"lattice_size", TYPE_INT_3VEC, &(intDat->LatticeSize), "32 32 32"},

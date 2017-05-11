@@ -37,6 +37,7 @@ typedef struct {
 // Params which don't need to be passed to GPU
 typedef struct {
 	
+	int consolePrintFreq;
     char initialDist[WORD_STRING_SIZE];
   
 } host_param_struct;

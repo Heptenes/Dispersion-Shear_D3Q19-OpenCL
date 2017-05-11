@@ -19,9 +19,9 @@ __kernel void GPU_newtonian_collide_stream_D3Q19_SRT(
 	float newtonianTau)
 {
 	// Get 3D indices
-	int i_x = get_global_id(0) + 1; // Shifted by 1 because of propagation buffer layer 
-	int i_y = get_global_id(1) + 1;
-	int i_z = get_global_id(2) + 1;
+	int i_x = get_global_id(0); // If global_work_offset = {1,1,1}
+	int i_y = get_global_id(1);
+	int i_z = get_global_id(2);
 	
 	int n_x = get_global_size(0);
 	int n_y = get_global_size(1);
@@ -199,7 +199,7 @@ __kernel void GPU_boundary_velocity(
 	v_w[1] = v[i_3[wallAxis]*3] + 1;
 	v_w[2] = v[i_3[wallAxis]*3] + 2;
 	
-	int i_n1 = wallAxis*2;
+	int i_n1 = wallAxis*2; 
 	int i_n2 = wallAxis*2 + 1;
 	
 	float N1 = 0.5*(N[i_n1][0] + N[i_n1][1] + N[i_n1][2] - N[i_n1][3] - N[i_n1][4] - N[i_n1][5])
