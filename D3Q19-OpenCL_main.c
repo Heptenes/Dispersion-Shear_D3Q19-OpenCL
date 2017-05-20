@@ -2,24 +2,24 @@
 #include "D3Q19-OpenCL_header.h"
 
 int main(int argc, char *argv[])
-{  
+{
 	cl_device_id devices[2]; // One CPU, one GPU
 	analyse_platform(devices);
 
 	// Create context and queues
-    cl_int error;
-    cl_context context;
-    context = clCreateContext(NULL, 2, devices, NULL, NULL, &error);
+	cl_int error;
+	cl_context context;
+	context = clCreateContext(NULL, 2, devices, NULL, NULL, &error);
 	error_check(error, "clCreateContext", 1);
 	
     // Create a command queue for CPU and GPU
     cl_command_queue queueCPU, queueGPU;
 	
-    queueCPU = clCreateCommandQueue(context, devices[0], 0, &error);
-    error_check(error, "clCreateCommandQueue", 1);
+	queueCPU = clCreateCommandQueue(context, devices[0], 0, &error);
+	error_check(error, "clCreateCommandQueue", 1);
 	
-    queueGPU = clCreateCommandQueue(context, devices[1], 0, &error);
-    error_check(error, "clCreateCommandQueue", 1);
+	queueGPU = clCreateCommandQueue(context, devices[1], 0, &error);
+	error_check(error, "clCreateCommandQueue", 1);
 	
 	// Test devices
 	vecadd_test(10, &devices[0], &queueCPU, &context);
@@ -37,49 +37,122 @@ int main(int argc, char *argv[])
 }
 
 int LB_main(cl_device_id* devices, 
-	cl_command_queue* queueCPU, cl_command_queue* queueGPU, 
+	cl_command_queue* CPU_QueuePtr, cl_command_queue* GPU_QueuePtr, 
 	cl_context* contextPtr)
 {
 	// Initialise parameter structs 
 	int_param_struct intDat;
-	float_param_struct flpDat;
+	flp_param_struct flpDat;
 	host_param_struct hostDat; // Params which remain in host memory
+	kernel_struct kernelDat;
 	
-	printf("%s %lu %lu\n\n", "Size of structs on host: ", sizeof(intDat), sizeof(flpDat));
+	// Check alignment
+	printf("%s %lu %d\n", "Int struct alignment", sizeof(intDat), ALIGN_INT_STRUCT);
+	printf("%s %lu %d\n", "Flp struct alignment", sizeof(flpDat), ALIGN_FLP_STRUCT);
 	
 	// Assign data arrays, read input
 	initialize_data(&intDat, &flpDat, &hostDat);
 	
-	int NumCells = intDat.LatticeSize[0]*intDat.LatticeSize[1]*intDat.LatticeSize[2];
-	size_t fDataSize = NumCells*LB_Q*sizeof(cl_float);
+	int paramErrors = parameter_checking(&intDat, &flpDat);
+	if (paramErrors > 0) {
+		exit(EXIT_FAILURE);
+	}
 	
-	cl_float* f_h; // f in host memory
+	int NumNodes = intDat.LatticeSize[0]*intDat.LatticeSize[1]*intDat.LatticeSize[2];
+	
+	// Create arrays on host
+	size_t fDataSize = NumNodes*LB_Q*sizeof(cl_float);
+	size_t v3DataSize = NumNodes*3*sizeof(cl_float);
+	
+	// --- HOST ARRAYS ---------------------------------------------------------
+	cl_float *f_h, *u_h, *g_h; // Distribution function and velocity 
 	f_h = (cl_float*)malloc(fDataSize);
+	u_h = (cl_float*)malloc(v3DataSize);
+	g_h = (cl_float*)malloc(v3DataSize);
 	
-	initialize_distribution(&hostDat, &intDat, f_h);
+	initialize_lattice_fields(&hostDat, &intDat, &flpDat, f_h, g_h, u_h);
+	printf("Total number of nodes %d\n", NumNodes);
 	
-	printf("%s %d\n", "Total number of cells ", NumCells);
-	
-	create_stream_mapping(&intDat);
+	// Stream mapping
+	cl_int* strMap;
+	cl_int numPeriodicNodes = create_periodic_stream_mapping(&intDat, &strMap); 
+	printf("Periodic boundary nodes %d\n", numPeriodicNodes);
+	size_t smDataSize = numPeriodicNodes*2*sizeof(cl_int);
 	
 	// Build LB kernels
-	cl_kernel kernelCPU[2], kernelGPU[2];
-	create_LB_kernels(contextPtr, devices, kernelCPU, kernelGPU);
-	
-	// Setup and write buffers
-	cl_mem fA_cl, fB_cl;
-    fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
+	create_LB_kernels(contextPtr, devices, &kernelDat);
+
+	// --- CREATE ARRAYS & BUFFERS ---------------------------------------------
+	cl_mem fA_cl, fB_cl, g_cl, u_cl;
+	fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
 	fB_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
-	//
+	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, v3DataSize, NULL, NULL);
+	g_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, v3DataSize, NULL, NULL);
 	
-	cl_mem intDat_cl, flpDat_cl;
+	// Read-only buffers
+	cl_mem intDat_cl, flpDat_cl, strMap_cl;
+	intDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(int_param_struct), NULL, NULL);
+	flpDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(flp_param_struct), NULL, NULL);
+	strMap_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, smDataSize, NULL, NULL);
 	
-	// --- KERNEL QUEUE SETTINGS -------------------------------------------------
+	// Write to device
+	cl_int error_h = CL_SUCCESS; 
+	error_h = clEnqueueWriteBuffer(*GPU_QueuePtr, fA_cl, CL_TRUE, 0, fDataSize, f_h, 0, NULL, NULL);
+	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, fB_cl, CL_TRUE, 0, fDataSize, f_h, 0, NULL, NULL);
+	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, g_cl, CL_TRUE, 0, v3DataSize, g_h, 0, NULL, NULL);
+	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, v3DataSize, u_h, 0, NULL, NULL);
+	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, strMap_cl, CL_TRUE, 0, smDataSize, strMap, 0, NULL, NULL);
+	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, intDat_cl, CL_TRUE, 0, sizeof(intDat), &intDat, 0, NULL, NULL);
+	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, flpDat_cl, CL_TRUE, 0, sizeof(flpDat), &flpDat, 0, NULL, NULL);
+	error_check(error_h, "clEnqueueWriteBuffer", 1);
+	
+	// --- KERNEL RANGE SETTINGS -----------------------------------------------
 	// Offset global id by 1, because of buffer layer
-	int global_work_offset[3] = {1, 1, 1}; // Perf test this
+	size_t global_work_offset[3] = {1, 1, 1}; // Perf test this
+	size_t global_work_size[3];
+	size_t velBC_work_size[3];
+	cl_int wallAxis=0;
+
+	// Work sizes
+	int velBoundary=0;
+	for (int dim=0; dim<3; dim++) {
+		global_work_size[dim] = intDat.LatticeSize[dim] - 2;
+		
+		if (intDat.BoundaryConds[dim] == 1) {
+			velBC_work_size[dim] = 2; // This is the velocity boundary pair
+			wallAxis = dim;
+			velBoundary = 1;
+		}
+		else {
+			velBC_work_size[dim] = intDat.LatticeSize[dim] - 2;
+		}
+	}
+	if (velBoundary) {
+		char xyz[4] = "XYZ\0";
+		printf("%s %c\n", "Velocity BC applied to walls normal to axis", xyz[wallAxis]);
+	}
 	
-	// --- MAIN LOOP -------------------------------------------------------------
-	cl_int error_main; 
+	size_t periodic_work_size = numPeriodicNodes;
+		
+	// --- FIXED KERNEL ARGS ---------------------------------------------------
+	size_t memSize = sizeof(cl_mem);
+	error_h = CL_SUCCESS; 
+	error_h |= clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 2, memSize, &g_cl);
+	error_h |= clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 3, memSize, &u_cl);
+	error_h |= clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 4, memSize, &intDat_cl);
+	error_h |= clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 5, memSize, &flpDat_cl);
+	
+	error_h |= clSetKernelArg(kernelDat.GPU_boundary_velocity, 1, memSize, &intDat_cl);
+	error_h |= clSetKernelArg(kernelDat.GPU_boundary_velocity, 2, memSize, &flpDat_cl);
+	error_h |= clSetKernelArg(kernelDat.GPU_boundary_velocity, 3, sizeof(cl_int), &wallAxis);
+
+	error_h |= clSetKernelArg(kernelDat.GPU_boundary_periodic, 1, memSize, &intDat_cl);
+	error_h |= clSetKernelArg(kernelDat.GPU_boundary_periodic, 2, memSize, &strMap_cl);
+	error_check(error_h, "clSetKernelArg", 1);
+	
+	// ---------------------------------------------------------------------------------
+	// --- MAIN LOOP -------------------------------------------------------------------
+	// ---------------------------------------------------------------------------------
 	printf("%s %d\n", "Starting iteration 1, maximum iterations", intDat.MaxIterations);
 	for (int t=1; t<=intDat.MaxIterations; t++) {
 		
@@ -91,52 +164,209 @@ int LB_main(cl_device_id* devices,
 		
 		// Switch f buffers
 		if (t%2 == 0) {
-		    error_main  = clSetKernelArg(kernelGPU[0], 0, sizeof(cl_mem), &fA_cl);
-		    error_main |= clSetKernelArg(kernelGPU[0], 1, sizeof(cl_mem), &fB_cl);
-			//error_check(error_main, "clSetKernelArg", 1);
+		    error_h  = clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 0, memSize, &fA_cl);
+		    error_h |= clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 1, memSize, &fB_cl);
+			error_h |= clSetKernelArg(kernelDat.GPU_boundary_velocity, 0, memSize, &fB_cl);
+			error_h |= clSetKernelArg(kernelDat.GPU_boundary_periodic, 0, memSize, &fB_cl);
+			//error_check(error_h, "clSetKernelArg", 1);
 		}
 		else {
-		    error_main  = clSetKernelArg(kernelGPU[0], 0, sizeof(cl_mem), &fB_cl);
-		    error_main |= clSetKernelArg(kernelGPU[0], 1, sizeof(cl_mem), &fA_cl);
-			//error_check(error_main, "clSetKernelArg", 1);
+		    error_h  = clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 0, memSize, &fB_cl);
+		    error_h |= clSetKernelArg(kernelDat.GPU_collideSRT_stream_D3Q19, 1, memSize, &fA_cl);
+			error_h |= clSetKernelArg(kernelDat.GPU_boundary_velocity, 0, memSize, &fA_cl);
+			error_h |= clSetKernelArg(kernelDat.GPU_boundary_periodic, 0, memSize, &fA_cl);
+			//error_check(error_h, "clSetKernelArg", 1);
 		}
 
-	    /*clEnqueueNDRangeKernel (	cl_command_queue command_queue,
-	    	kernelGPU[0],
-	    	3,
-	    	global_work_offset,
+	    clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.GPU_collideSRT_stream_D3Q19, 3,
+	    	global_work_offset, global_work_size, NULL, 0, NULL, NULL);
 		
-	    	global_work_size,
-	    	local_work_size,
-	    	0, NULL, NULL)*/
+		clFinish(*GPU_QueuePtr);
 		
-		//clFinish(*queueGPU);
-
+	    clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.GPU_boundary_periodic, 1, 
+			NULL, &periodic_work_size, NULL, 0, NULL, NULL);
+			
+		clFinish(*GPU_QueuePtr);
+		
+		if (velBoundary) {
+		    clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.GPU_boundary_velocity, 3, 
+				global_work_offset, velBC_work_size, NULL, 0, NULL, NULL);
+				
+			clFinish(*GPU_QueuePtr);
+		}
 	}
 	
-	// Cleanup
-	clReleaseKernel(kernelCPU[0]);
-	//clReleaseKernel(kernelCPU[1]);
-	clReleaseKernel(kernelGPU[0]);
-	clReleaseKernel(kernelGPU[1]);
+	// --- COPY DATA TO HOST ---------------------------------------------------
+	// Velocity
+	error_h = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, v3DataSize, u_h, 0, NULL, NULL);
+	error_check(error_h, "clEnqueueReadBuffer", 1);
+	
+	lattice_field_write(u_h, &intDat);
+	
+	// Cleanup 
+	void* kernelPtr = &kernelDat;
+	
+#define X(kernelName) clReleaseKernel(kernelDat.kernelName);
+	LIST_OF_KERNELS
+#undef X
 	clReleaseMemObject(fA_cl);
 	clReleaseMemObject(fB_cl);
-	//clReleaseMemObject(intDat_cl);
-	//clReleaseMemObject(flpDat_cl);
+	clReleaseMemObject(intDat_cl);
+	clReleaseMemObject(flpDat_cl);
 		
 	return 0;
 }
 
-int create_stream_mapping(int_param_struct* intDat)
+int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 {
-	// Propagation optimized data layout
 	
+	int N_x = intDat->LatticeSize[0];
+	int N_y = intDat->LatticeSize[1];
+	int N_z = intDat->LatticeSize[2];
+	
+	int b = 1; // Buffer layer thickness
+	
+	// Constant coord for each face and its value, then upper range of loop for other 2 axis
+	// x-axis on inner loop where possible
+	const int faceSpec[6][6] = {
+		{0,b,       2,N_z-b-2, 1,N_y-b-2}, // N-b-2 because edges/verts of face treated separately
+		{0,N_x-b-1, 2,N_z-b-2, 1,N_y-b-2}, // Loops are inclusive (<=) upper range
+		{1,b,       2,N_z-b-2, 0,N_x-b-2},
+		{1,N_y-b-1, 2,N_z-b-2, 0,N_x-b-2},
+		{2,b,       1,N_y-b-2, 0,N_x-b-2},
+		{2,N_z-b-1, 1,N_y-b-2, 0,N_x-b-2} 
+	};
+	
+	// Two constant coords for each edge and their value, then upper range of the edge axis
+	const int edgeSpec[12][6] = {
+		{0,b,       1,b,       2,N_z-b-2},
+		{0,b,       1,N_y-b-1, 2,N_z-b-2},
+		{0,b,       2,b,       1,N_y-b-2},
+		{0,b,       2,N_z-b-1, 1,N_y-b-2},		
+		{0,N_x-b-1, 1,b,       2,N_z-b-2},
+		{0,N_x-b-1, 1,N_y-b-1, 2,N_z-b-2},
+		{0,N_x-b-1, 2,b,       1,N_y-b-2},
+		{0,N_x-b-1, 2,N_z-b-1, 1,N_y-b-2},
+		{1,b,       2,b,       0,N_x-b-2},
+		{1,b,       2,N_z-b-1, 0,N_x-b-2},
+		{1,N_y-b-1, 2,b,       0,N_x-b-2},
+		{1,N_y-b-1, 2,N_z-b-1, 0,N_x-b-2}
+	};
+	
+	// Coords of vertexes
+	const int vertSpec[8][3] = {
+		{b,         b,         b      },
+		{b,         b,         N_z-b-1},
+		{b,         N_y-b-1,   b      },
+		{b,         N_y-b-1,   N_z-b-1},
+		{N_x-b-1,   b,         b      },
+		{N_x-b-1,   b,         N_z-b-1},
+		{N_x-b-1,   N_y-b-1,   b      },
+		{N_x-b-1,   N_y-b-1,   N_z-b-1}
+	};
+	
+	int tempMapping[N_x*N_y*N_z][2]; // Max possible size 
+	int numPeriodicNodes = 0;
+	
+	// Write:
+	// 1D index, face/edge/vertex type
+	
+	// Faces
+	for (int face=0; face<6; face++){
+		// If face of periodic boundary
+		if (intDat->BoundaryConds[(int)(face/2)] == 0) { 
+			
+			for (int i=b+1; i<=faceSpec[face][3]; i++) {
+				for (int j=b+1; j<=faceSpec[face][5]; j++) {
+									
+					// Coords of this node
+					int r[3];
+					r[faceSpec[face][0]] = faceSpec[face][1]; // The constant coord in plane
+					r[faceSpec[face][2]] = i;
+					r[faceSpec[face][4]] = j;
+					// 1D index of node
+					int i_1D = r[0] + N_x*(r[1] + r[2]*N_y);
+					
+					tempMapping[numPeriodicNodes][0] = i_1D; // 1D index of node in f array
+					tempMapping[numPeriodicNodes][1] = face; // Boundary node type
+						
+					numPeriodicNodes++;
+				}
+			}	
+		}
+	}
+	
+	// Edges
+	// Small perf saving possible, because edges of velocity boundaries don't need all unknowns 
+	for (int edge=0; edge<12; edge++) {
+		
+		// If edge of two periodic boundaries
+		if (intDat->BoundaryConds[edgeSpec[edge][0]] == 0 
+		||  intDat->BoundaryConds[edgeSpec[edge][2]] == 0) {
+			
+			for (int i=b+1; i<=edgeSpec[edge][5]; i++) {
+				
+				// Coords of this node
+				int r[3];
+				r[edgeSpec[edge][0]] = edgeSpec[edge][1]; // Constant coords of edge
+				r[edgeSpec[edge][2]] = edgeSpec[edge][3];
+				r[edgeSpec[edge][4]] = i;
+				
+				// 1D index of node
+				int i_1D = r[0] + N_x*(r[1] + r[2]*N_y);
+				
+				tempMapping[numPeriodicNodes][0] = i_1D; // 1D index of node f array
+				tempMapping[numPeriodicNodes][1] = 6 + edge; // Boundary node type
+				
+				numPeriodicNodes++;
+			}
+		}
+	}
+	
+	// Verticies (any boundaries periodic)
+	if (intDat->BoundaryConds[0] == 0 
+	||  intDat->BoundaryConds[1] == 0
+	||  intDat->BoundaryConds[2] == 0) {
+		
+		for (int vert=0; vert<8; vert++){
+			
+			// Coords of this node
+			int r[3];
+			r[0] = vertSpec[vert][0]; // Constant coords of vert
+			r[1] = vertSpec[vert][1];
+			r[2] = vertSpec[vert][2];
+			
+			// 1D index of node
+			int i_1D = r[0] + N_x*(r[1] + r[2]*N_y);
+			
+			tempMapping[numPeriodicNodes][0] = i_1D; // 1D index of node in f array
+			tempMapping[numPeriodicNodes][1] = 18 + vert; // Boundary node type
+			
+			numPeriodicNodes++;
+		}
+	}
+	
+	// Copy to mapping array with thread-coalesced memory layout
+	*strMapPtr = (cl_int*)malloc(numPeriodicNodes*2*sizeof(cl_int));
+	for (int node=0; node<numPeriodicNodes; node++) {
+		(*strMapPtr)[                   node] = tempMapping[node][0]; // 1D index
+		(*strMapPtr)[numPeriodicNodes + node] = tempMapping[node][1]; // Boundary node type
+	}
+	
+	return numPeriodicNodes;
+}
+
+int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat)
+{
+	if ((intDat->BoundaryConds[0]+intDat->BoundaryConds[1]+intDat->BoundaryConds[2]) > 1) {
+		printf("Error: More than 1 pair of faces with velocity boundaries not yet supported.\n");
+		return 1;
+	}
 	
 	return 0;
 }
 
-int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, cl_kernel* kernelCPU, 
-	cl_kernel* kernelGPU)
+int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_struct* kernelDat)
 {
 	char* programSourceCPU = NULL;
 	char* programSourceGPU = NULL;
@@ -155,27 +385,33 @@ int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, cl_kernel* 
 		NULL, &error);
 	error_check(error, "clCreateProgramWithSource CPU", 1);
 	
-	clBuildProgram(programCPU, 1, &devices[0], NULL, NULL, &error);
+	// Build for both devices (for debugging)
+	clBuildProgram(programCPU, 2, devices, NULL, NULL, &error);
 	error_check(error, "cclBuildProgram CPU", 1);
 	
 	programGPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceGPU, 
 		NULL, &error);
 	error_check(error, "clCreateProgramWithSource GPU", 1);
 	
-	clBuildProgram(programGPU, 1, &devices[1], NULL, NULL, &error);
+	clBuildProgram(programGPU, 2, devices, NULL, NULL, &error);
 	error_check(error, "cclBuildProgram GPU", 1);
 	
 	// Select kernels from program
-	kernelCPU[0] = clCreateKernel(programCPU, "CPU_sphere_collide", &error);
+	kernelDat->CPU_sphere_collide = clCreateKernel(programCPU, "CPU_sphere_collide", &error);
 	if (!error_check(error, "clCreateKernel CPU", 1))		
 		print_program_build_log(&programCPU, &devices[0]);
 	
-	kernelGPU[0] = clCreateKernel(programGPU, "GPU_newtonian_collide_stream_D3Q19_SRT", &error);
-	if (!error_check(error, "clCreateKernel GPU 1", 1))		
+	kernelDat->GPU_collideSRT_stream_D3Q19 = 
+		clCreateKernel(programGPU, "GPU_collideSRT_stream_D3Q19", &error);
+	if (!error_check(error, "clCreateKernel GPU_collideSRT_stream_D3Q19", 1))		
 		print_program_build_log(&programGPU, &devices[1]);
 	
-	kernelGPU[1] = clCreateKernel(programGPU, "GPU_boundary_velocity", &error);
-	if (!error_check(error, "clCreateKernel GPU 2", 1))		
+	kernelDat->GPU_boundary_velocity = clCreateKernel(programGPU, "GPU_boundary_velocity", &error);
+	if (!error_check(error, "clCreateKernel GPU_boundary_velocity", 1))		
+		print_program_build_log(&programGPU, &devices[1]);
+	
+	kernelDat->GPU_boundary_periodic = clCreateKernel(programGPU, "GPU_boundary_periodic", &error);
+	if (!error_check(error, "clCreateKernel GPU_boundary_periodic", 1))		
 		print_program_build_log(&programGPU, &devices[1]);
 	
 	
@@ -199,7 +435,7 @@ int print_program_build_log(cl_program* program, cl_device_id* device)
 }
 
 // Function to set up data arrays and read input file
-int initialize_data(int_param_struct* intDat, float_param_struct* flpDat,
+int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat,
 host_param_struct* hostDat)
 {
 	// Constant data
@@ -224,9 +460,11 @@ host_param_struct* hostDat)
 		{"iterations", TYPE_INT, &(intDat->MaxIterations), "1000"},
 		{"console_print_freq", TYPE_INT, &(hostDat->consolePrintFreq), "10"},
 		{"constant_body_force", TYPE_FLOAT_3VEC, &(flpDat->ConstBodyForce), "0.0 0.0 0.0"},
+		{"newtonian_tau", TYPE_FLOAT, &(flpDat->NewtonianTau), "0.8"},
 		{"viscosity_model", TYPE_INT, &(intDat->ViscosityModel), "0"},
-		{"lattice_size", TYPE_INT_3VEC, &(intDat->LatticeSize), "32 32 32"},
-		{"initial_f", TYPE_STRING, &(hostDat->initialDist), "zero_vel"},
+		{"total_lattice_size", TYPE_INT_3VEC, &(intDat->LatticeSize), "32 32 32"},
+		{"initial_f", TYPE_STRING, &(hostDat->initialDist), "zero"},
+		{"initial_vel", TYPE_FLOAT_3VEC, &(hostDat->initialVel), "0.0 0.0 0.0"},
 		{"boundary_conditions_xyz", TYPE_INT_3VEC, &(intDat->BoundaryConds), "0 0 0"},
 		{"velocity_bc_upper", TYPE_FLOAT_3VEC, &(flpDat->VelUpper), "0.0 0.0 0.0"},
 		{"velocity_bc_lower", TYPE_FLOAT_3VEC, &(flpDat->VelLower), "0.0 0.0 0.0"}
@@ -262,41 +500,59 @@ host_param_struct* hostDat)
 	return 0;
 }
 
-int initialize_distribution(host_param_struct* hostDat, int_param_struct* intDat,
-	cl_float* f_h)
+int initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, 
+	flp_param_struct* flpDat, cl_float* f_h, cl_float* g_h, cl_float* u_h)
 {
 	printf("%s %s\n", "Initial distribution type ", hostDat->initialDist);
 	
-	int NumCells = intDat->LatticeSize[0]*intDat->LatticeSize[1]*intDat->LatticeSize[2];
+	int NumNodes = intDat->LatticeSize[0]*intDat->LatticeSize[1]*intDat->LatticeSize[2];
 	
-	if (strcasestr(hostDat->initialDist, "zero_vel") != NULL)
+	if (strcasestr(hostDat->initialDist, "poiseuille") != NULL)
 	{   	
-		float vel[3] = {0.0, 0.0, 0.0};
+		// Do something
+	}
+	else if (strcasestr(hostDat->initialDist, "constant") != NULL)
+	{   	
+		float vel[3];
 		float f_eq[19];
+		vel[0] = hostDat->initialVel[0];
+		vel[1] = hostDat->initialVel[1];
+		vel[2] = hostDat->initialVel[2];
 		
-		// Write according to propagation optimized data layout
-		for(int i_f=0; i_f<19; i_f++)
-		{
-			for(int i_c=0; i_c<NumCells; i_c++)
-			{
-				equilibrium_distribution_D3Q19(1.0, vel, f_eq);
-				f_h[i_f*NumCells + i_c] = f_eq[i_f];
+		equilibrium_distribution_D3Q19(1.0, vel, f_eq);
+		
+		// Use propagation-optimized data layouts
+		for(int i_c=0; i_c<NumNodes; i_c++) {
+			
+			for(int i_f=0; i_f<19; i_f++) {
+				f_h[i_c + i_f*NumNodes] = f_eq[i_f];
 			}	
+			u_h[i_c               ] = hostDat->initialVel[0];
+			u_h[i_c +     NumNodes] = hostDat->initialVel[1];
+			u_h[i_c +   2*NumNodes] = hostDat->initialVel[2];
+			g_h[i_c               ] = flpDat->ConstBodyForce[0];
+			g_h[i_c +     NumNodes] = flpDat->ConstBodyForce[1];
+			g_h[i_c +   2*NumNodes] = flpDat->ConstBodyForce[2];
 		}
 	}
 	else // Zero is default
 	{
 		float vel[3] = {0.0, 0.0, 0.0};
 		float f_eq[19];
+		equilibrium_distribution_D3Q19(1.0, vel, f_eq);
 		
-		// Write according to propagation optimized data layout
-		for(int i_f=0; i_f<19; i_f++)
-		{
-			for(int i_c=0; i_c<NumCells; i_c++)
-			{
-				equilibrium_distribution_D3Q19(1.0, vel, f_eq);
-				f_h[i_f*NumCells + i_c] = f_eq[i_f];
+		// Use propagation-optimized data layouts
+		for(int i_c=0; i_c<NumNodes; i_c++) {
+			
+			for(int i_f=0; i_f<19; i_f++) {
+				f_h[i_c + i_f*NumNodes] = f_eq[i_f];
 			}	
+			u_h[i_c               ] = 0.0;
+			u_h[i_c +     NumNodes] = 0.0;
+			u_h[i_c +   2*NumNodes] = 0.0;
+			g_h[i_c               ] = flpDat->ConstBodyForce[0];
+			g_h[i_c +     NumNodes] = flpDat->ConstBodyForce[1];
+			g_h[i_c +   2*NumNodes] = flpDat->ConstBodyForce[2];
 		}
 	}
 	return 0;
@@ -348,7 +604,7 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 		
 		if (searchPtr)
 		{
-			printf("%s %s\n", "Found input file line ", (inputDefaults+l)->keyword);
+			//printf("%s %s\n", "Found input file line ", (inputDefaults+l)->keyword);
 			
 			// Cast as appropriate data types 
 			if ((inputDefaults+l)->dataType == TYPE_INT)
@@ -391,7 +647,30 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 	return 0;
 }
 
-int display_input_params(int_param_struct* intDat, float_param_struct* flpDat)
+int lattice_field_write(cl_float* field, int_param_struct* intDat)
+{
+	FILE* fPtr;
+	fPtr = fopen ("velocity_field_final.txt","w");
+		
+	int n_C = intDat->LatticeSize[0]*intDat->LatticeSize[1]*intDat->LatticeSize[2];
+	
+	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x++) {
+		for(int i_y=1; i_y < intDat->LatticeSize[1]-1; i_y++) {
+			for(int i_z=1; i_z < intDat->LatticeSize[0]-1; i_z++) {
+				
+				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
+				
+				// Index, then velocity
+				fprintf(fPtr, "%d %d %d ", i_x, i_y, i_z);
+				fprintf(fPtr, "%9.7f %9.7f %9.7f\n", field[i_1D],  field[i_1D + n_C],  field[i_1D + 2*n_C]);
+				
+			}
+		}
+	}
+	return 0;
+}
+
+int display_input_params(int_param_struct* intDat, flp_param_struct* flpDat)
 {
 	printf("%s %d \n", "ViscosityModel = ", intDat->ViscosityModel);
 	printf("%s %f %f %f \n", "ConstBodyForce = ", flpDat->ConstBodyForce[0], 
@@ -466,7 +745,8 @@ void analyse_platform(cl_device_id* devices)
 		
 		size_t buf_wi_size[3];
 		clGetDeviceInfo(devicePtrCPU[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, sizeof(buf_wi_size), &buf_wi_size, NULL);
-		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n\n", (unsigned long)buf_wi_size[0], (unsigned long)buf_wi_size[1], (unsigned long)buf_wi_size[2]);
+		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n\n", (unsigned long)buf_wi_size[0], 
+			(unsigned long)buf_wi_size[1], (unsigned long)buf_wi_size[2]);
 	}	
 	
 	// Print GPU information
@@ -484,11 +764,14 @@ void analyse_platform(cl_device_id* devices)
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_CLOCK_FREQUENCY, sizeof(buf_freq), &buf_freq, NULL);
 		printf("DEVICE_MAX_CLOCK_FREQUENCY = %u\n", (unsigned int)buf_freq);
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(buf_mem), &buf_mem, NULL);
-		printf("DEVICE_GLOBAL_MEM_SIZE = %llu\n", (unsigned long long)buf_mem);
+		printf("DEVICE_GLOBAL_MEM_SIZE = %llu\n", (unsigned long long)buf_mem);	
+		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE, sizeof(buf_mem), &buf_mem, NULL);
+		printf("CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE = %llu\n", (unsigned long long)buf_mem);
 		
 		size_t buf_wi_size[3];
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, sizeof(buf_wi_size), &buf_wi_size, NULL);
-		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n\n", (unsigned long)buf_wi_size[0], (unsigned long)buf_wi_size[1], (unsigned long)buf_wi_size[2]);
+		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n\n", (unsigned long)buf_wi_size[0], 
+			(unsigned long)buf_wi_size[1], (unsigned long)buf_wi_size[2]);
 	}
 	
 	// Deal with double precision, and case where there is no GPU
@@ -515,16 +798,15 @@ void read_program_source(char** programSourcePtr, const char* programName)
 	
 	fread(*programSourcePtr, sizeof(char), programSize, file);
 	
-	FILE* outputFile = fopen("test_output.txt", "w");
-	fprintf(outputFile, "%s", (*programSourcePtr));
+	//FILE* outputFile = fopen("test_output.txt", "w");
+	//fprintf(outputFile, "%s", (*programSourcePtr));
 	
 	fclose(file);
 }
 	
 int error_check(cl_int err, char* clFunc, bool print)
 {
-	if(err != CL_SUCCESS)
-	{
+	if(err != CL_SUCCESS) {
 		printf("Call to %s failed (%d):\n", clFunc, err);
 		
 		switch((int)err)
@@ -591,13 +873,11 @@ int error_check(cl_int err, char* clFunc, bool print)
 		}
 		return 0;
 	}
-	else if (print == 1)
-	{
+	else if (print == 1) {
         printf("Call to %s success (%d) \n", clFunc, err);
 		return 1;
 	}
-	else
-	{
+	else {
 		return 1;
 	}
 }
@@ -605,6 +885,9 @@ int error_check(cl_int err, char* clFunc, bool print)
 // Test function to check command queue and device are working
 void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queuePtr, cl_context* contextPtr)
 {
+	char buf_name[1024];
+	clGetDeviceInfo(*devicePtr, CL_DEVICE_NAME, sizeof(buf_name), buf_name, NULL);
+	printf("vecadd_test, DEVICE_NAME = %s\n", buf_name);
 
     cl_int* A = NULL;
     cl_int* B = NULL;
@@ -664,10 +947,9 @@ void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queuePtr, 
 	error = clEnqueueReadBuffer(*queuePtr, C_d, CL_TRUE, 0, dataSize, C, 0, NULL, NULL);
 	error_check(error, "clEnqueueReadBuffer", 1);
 	
-	for(int i=0; i<size; i++)
-	{
-        printf("%i %i %i \n", A[i], B[i], C[i]);
-    }
+	//for(int i=0; i<size; i++) {
+    //    printf("%i %i %i \n", A[i], B[i], C[i]);
+    //}
 	
 	// Clean-up
 	clReleaseKernel(kernel);
