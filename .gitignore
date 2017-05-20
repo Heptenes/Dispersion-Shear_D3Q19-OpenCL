@@ -1,2 +1,4 @@
 D3Q19-OpenCL_bin.out
 matlab_postproc/
+test_output.txt
+old_vel_BC_tables.c
