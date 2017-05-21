@@ -10,7 +10,7 @@ typedef struct {
 	cl_int BoundaryConds[3];
     cl_int ViscosityModel;
 	
-} int_param_struct __attribute__((aligned (ALIGN_INT_STRUCT)));
+} int_param_struct __attribute__((aligned (16)));
 
 
 typedef struct {
@@ -21,4 +21,4 @@ typedef struct {
 	cl_float VelLower[3];
 	cl_float NewtonianTau;
   
-} flp_param_struct __attribute__((aligned (ALIGN_FLP_STRUCT)));
+} flp_param_struct __attribute__((aligned (16)));

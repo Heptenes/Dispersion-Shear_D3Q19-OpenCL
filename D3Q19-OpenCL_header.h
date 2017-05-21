@@ -21,9 +21,6 @@
 
 #define LB_Q 19
 
-#define ALIGN_INT_STRUCT 512
-#define ALIGN_FLP_STRUCT 256
-
 // X-macros
 #define LIST_OF_KERNELS \
     X(GPU_collideSRT_stream_D3Q19) \
@@ -77,7 +74,7 @@ int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq);
 	
 int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr);
 int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputDefaultSize);
-int lattice_field_write(cl_float* u_h, int_param_struct* intDat);
+int write_lattice_field(cl_float* u_h, int_param_struct* intDat);
 int display_input_params(int_param_struct* intParams, flp_param_struct* floatParams);
 
 int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_struct* kernelDat);

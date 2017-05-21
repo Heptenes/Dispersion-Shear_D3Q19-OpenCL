@@ -10,8 +10,8 @@ __kernel void GPU_collideSRT_stream_D3Q19(
 	__global float* f_s,
 	__global float* g, 
 	__global float* u, 
-	__constant int_param_struct* intDat,
-	__constant flp_param_struct* flpDat)
+	__global int_param_struct* intDat,
+	__global flp_param_struct* flpDat)
 {
 	// Get 3D indices
 	int i_x = get_global_id(0); // Using global_work_offset to take buffer layer into account
@@ -95,8 +95,8 @@ __kernel void GPU_collideSRT_stream_D3Q19(
 }
 
 __kernel void GPU_boundary_periodic(__global float* f_s,
-	__constant int_param_struct* intDat,
-	__constant int* streamMapping)
+	__global int_param_struct* intDat,
+	__global int* streamMapping)
 {
 	int i_k = get_global_id(0);
 	int N_BC = get_global_size(0); // Total number of periodic boundary nodes
@@ -193,9 +193,10 @@ __kernel void GPU_boundary_periodic(__global float* f_s,
 			int c_a = intDat->BasisVel[i_f][dim];
 			int m_a = inwardNormals[typeBC][dim];
 			// If both non-zero and same direction
-			offset[dim] = c_a*m_a*(c_a+m_a)*0.5*(N[dim]-2); 
+			offset[dim] = ((c_a*m_a*(c_a+m_a))/2)*(N[dim]-2); 
 		}
-		//printf("i,i_f, offset %d,%d %d,%d,%d\n", i_1D, i_f, offset[0], offset[1], offset[2]);
+		//printf("i_k,typeBC,i,i_f,offset %d,%d,%d,%d %d,%d,%d\n", 
+		//i_k, typeBC, i_1D, i_f, offset[0], offset[1], offset[2]);
 		
 		int periodic_1D = i_1D + offset[0] + N[0]*(offset[1] + N[1]*offset[2]);
 		
@@ -206,8 +207,8 @@ __kernel void GPU_boundary_periodic(__global float* f_s,
 
 __kernel void GPU_boundary_velocity(
 	__global float* f_s,
-	__constant int_param_struct* intDat,
-	__constant flp_param_struct* flpDat,
+	__global int_param_struct* intDat,
+	__global flp_param_struct* flpDat,
 	int wallAxis) // Could try adding this argument to intDat
 {
 	// Get 3D indices
@@ -289,7 +290,7 @@ __kernel void GPU_boundary_velocity(
 	float rho = ( f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
 		+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]) )/(1.0f-u_n);
 	
-	// Calculate 'tranverse momentum correction
+	// Calculate 'tranverse momentum correction'
 	float N_a1 = 0.5f*(f_k[1]+f_k[5]+f_k[6] -f_k[2]-f_k[7]-f_k[8]) - rho*u_a1/3.0f;
 	float N_a2 = 0.5f*(f_k[3]+f_k[5]+f_k[7] -f_k[4]-f_k[6]-f_k[8]) - rho*u_a2/3.0f;
 	

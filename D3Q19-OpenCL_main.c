@@ -47,8 +47,8 @@ int LB_main(cl_device_id* devices,
 	kernel_struct kernelDat;
 	
 	// Check alignment
-	printf("%s %lu %d\n", "Int struct alignment", sizeof(intDat), ALIGN_INT_STRUCT);
-	printf("%s %lu %d\n", "Flp struct alignment", sizeof(flpDat), ALIGN_FLP_STRUCT);
+	printf("Int struct size: %lu\n", sizeof(intDat));
+	printf("Flp struct size: %lu\n", sizeof(flpDat));
 	
 	// Assign data arrays, read input
 	initialize_data(&intDat, &flpDat, &hostDat);
@@ -78,6 +78,9 @@ int LB_main(cl_device_id* devices,
 	cl_int numPeriodicNodes = create_periodic_stream_mapping(&intDat, &strMap); 
 	printf("Periodic boundary nodes %d\n", numPeriodicNodes);
 	size_t smDataSize = numPeriodicNodes*2*sizeof(cl_int);
+	for (int i_map=0; i_map<numPeriodicNodes; i_map++) {
+		//printf("i_1D, typeBC: %d, %d\n", strMap[i_map],strMap[i_map+numPeriodicNodes]);
+	}
 	
 	// Build LB kernels
 	create_LB_kernels(contextPtr, devices, &kernelDat);
@@ -201,11 +204,9 @@ int LB_main(cl_device_id* devices,
 	error_h = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, v3DataSize, u_h, 0, NULL, NULL);
 	error_check(error_h, "clEnqueueReadBuffer", 1);
 	
-	lattice_field_write(u_h, &intDat);
+	write_lattice_field(u_h, &intDat);
 	
-	// Cleanup 
-	void* kernelPtr = &kernelDat;
-	
+	// Cleanup 	
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);
 	LIST_OF_KERNELS
 #undef X
@@ -647,7 +648,7 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 	return 0;
 }
 
-int lattice_field_write(cl_float* field, int_param_struct* intDat)
+int write_lattice_field(cl_float* field, int_param_struct* intDat)
 {
 	FILE* fPtr;
 	fPtr = fopen ("velocity_field_final.txt","w");
@@ -656,7 +657,7 @@ int lattice_field_write(cl_float* field, int_param_struct* intDat)
 	
 	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x++) {
 		for(int i_y=1; i_y < intDat->LatticeSize[1]-1; i_y++) {
-			for(int i_z=1; i_z < intDat->LatticeSize[0]-1; i_z++) {
+			for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z++) {
 				
 				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
 				
@@ -889,21 +890,21 @@ void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queuePtr, 
 	clGetDeviceInfo(*devicePtr, CL_DEVICE_NAME, sizeof(buf_name), buf_name, NULL);
 	printf("vecadd_test, DEVICE_NAME = %s\n", buf_name);
 
-    cl_int* A = NULL;
-    cl_int* B = NULL;
-    cl_int* C = NULL; 
+	cl_int* A = NULL;
+	cl_int* B = NULL;
+	cl_int* C = NULL; 
     
-    size_t dataSize = size*sizeof(cl_int);
-    A = (cl_int*)malloc(dataSize);
-    B = (cl_int*)malloc(dataSize);
-    C = (cl_int*)malloc(dataSize);
+	size_t dataSize = size*sizeof(cl_int);
+	A = (cl_int*)malloc(dataSize);
+	B = (cl_int*)malloc(dataSize);
+	C = (cl_int*)malloc(dataSize);
 	
-    // Initialize the input data
-    for(int i=0; i<size; i++)
+	// Initialize the input data
+	for(int i=0; i<size; i++)
 	{
-        A[i] = i;
-        B[i] = i*i;
-    }
+		A[i] = i;
+		B[i] = i*i;
+	}
 	
 	// Build test program and kernel
 	char* programSource = NULL;
@@ -922,17 +923,17 @@ void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queuePtr, 
 	
 	// Setup and write buffers
 	cl_mem A_d, B_d, C_d;
-    A_d = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, dataSize, NULL, NULL);
-    B_d = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, dataSize, NULL, NULL);
-    C_d = clCreateBuffer(*contextPtr, CL_MEM_WRITE_ONLY, dataSize, NULL, NULL);
+	A_d = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, dataSize, NULL, NULL);
+	B_d = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, dataSize, NULL, NULL);
+	C_d = clCreateBuffer(*contextPtr, CL_MEM_WRITE_ONLY, dataSize, NULL, NULL);
 	
-    error = clEnqueueWriteBuffer(*queuePtr, A_d, CL_TRUE, 0, dataSize, A, 0, NULL, NULL);
-    error |= clEnqueueWriteBuffer(*queuePtr, B_d, CL_TRUE, 0, dataSize, B, 0, NULL, NULL);
-    error_check(error, "clEnqueueWriteBuffer", 1);
+	error = clEnqueueWriteBuffer(*queuePtr, A_d, CL_TRUE, 0, dataSize, A, 0, NULL, NULL);
+	error |= clEnqueueWriteBuffer(*queuePtr, B_d, CL_TRUE, 0, dataSize, B, 0, NULL, NULL);
+	error_check(error, "clEnqueueWriteBuffer", 1);
 	
-    error  = clSetKernelArg(kernel, 0, sizeof(cl_mem), &A_d);
-    error |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &B_d);
-    error |= clSetKernelArg(kernel, 2, sizeof(cl_mem), &C_d);
+	error  = clSetKernelArg(kernel, 0, sizeof(cl_mem), &A_d);
+	error |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &B_d);
+	error |= clSetKernelArg(kernel, 2, sizeof(cl_mem), &C_d);
 	error_check(error, "clSetKernelArg", 1);
 		
 	// Enqueue kernel
@@ -948,8 +949,8 @@ void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queuePtr, 
 	error_check(error, "clEnqueueReadBuffer", 1);
 	
 	//for(int i=0; i<size; i++) {
-    //    printf("%i %i %i \n", A[i], B[i], C[i]);
-    //}
+	//    printf("%i %i %i \n", A[i], B[i], C[i]);
+	//}
 	
 	// Clean-up
 	clReleaseKernel(kernel);
