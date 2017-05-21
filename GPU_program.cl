@@ -49,9 +49,9 @@ __kernel void GPU_collideSRT_stream_D3Q19(
 		
 	// Compute velocity	(J. Stat. Mech. (2010) P01018 convention)
 	// w/ body force contribution (Guo et al. 2002)
-	float u_x = (f[1]-f[2]+f[7]+f[8] +f[9] +f[10]-f[11]-f[12]-f[13]-f[14] + 0.5*g_x)/rho;
-	float u_y = (f[3]-f[4]+f[7]-f[8] +f[11]-f[12]+f[15]+f[16]-f[17]-f[18] + 0.5*g_y)/rho;
-	float u_z = (f[5]-f[6]+f[9]-f[10]+f[13]-f[14]+f[15]-f[16]+f[17]-f[18] + 0.5*g_z)/rho;
+	float u_x = (f[1]-f[2]+f[7]+f[8] +f[9] +f[10]-f[11]-f[12]-f[13]-f[14] + 0.5f*g_x)/rho;
+	float u_y = (f[3]-f[4]+f[7]-f[8] +f[11]-f[12]+f[15]+f[16]-f[17]-f[18] + 0.5f*g_y)/rho;
+	float u_z = (f[5]-f[6]+f[9]-f[10]+f[13]-f[14]+f[15]-f[16]+f[17]-f[18] + 0.5f*g_z)/rho;
 		
 	// Write to __global *u
 	u[ i_1D         ] = u_x;
@@ -78,7 +78,7 @@ __kernel void GPU_collideSRT_stream_D3Q19(
 	float fGuo[19];
 	guo_body_force_term(u_x, u_y, u_z, g_x, g_y, g_z, fGuo);
 	
-	float pfGuo = (1 - 0.5/tau); // Guo term SRT collision prefactor 
+	float pfGuo = (1.0f - 0.5f/tau); // Guo term SRT collision prefactor 
 	
 	//float guoSum = 0.0;
 	for(int i = 0; i < 19; i++) {
