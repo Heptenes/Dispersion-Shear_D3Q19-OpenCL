@@ -508,11 +508,11 @@ int initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intD
 	
 	int NumNodes = intDat->LatticeSize[0]*intDat->LatticeSize[1]*intDat->LatticeSize[2];
 	
-	if (strcasestr(hostDat->initialDist, "poiseuille") != NULL)
+	if (strstr(hostDat->initialDist, "poiseuille") != NULL)
 	{   	
 		// Do something
 	}
-	else if (strcasestr(hostDat->initialDist, "constant") != NULL)
+	else if (strstr(hostDat->initialDist, "constant") != NULL)
 	{   	
 		float vel[3];
 		float f_eq[19];
@@ -601,7 +601,7 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 	for (int l=0; l<inputDefaultSize; l++)
 	{
 		// Search for match
-		char* searchPtr = strcasestr(fLine, (inputDefaults+l)->keyword);
+		char* searchPtr = strstr(fLine, (inputDefaults+l)->keyword);
 		
 		if (searchPtr)
 		{
