@@ -19,6 +19,8 @@
 #define BC_BOUNCE_BACK 1
 #define BC_VELOCITY 2
 
+#define WORD_STRING_SIZE 64
+
 #define LB_Q 19
 
 // X-macros
@@ -64,8 +66,7 @@ int LB_main(cl_device_id* devices,
 	cl_command_queue* queueCPU, cl_command_queue* queueGPU, 
 	cl_context* contextPtr);
 	
-int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams,
-	host_param_struct* hostParams);
+int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams, host_param_struct* hostParams);
 int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat);
 
 int initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, 
@@ -81,6 +82,6 @@ int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_stru
 int print_program_build_log(cl_program* program, cl_device_id* device);
 
 void analyse_platform(cl_device_id* devices);
-int error_check(cl_int err, char* clFunc, bool print);
+int error_check(cl_int err, char* clFunc, int print);
 void read_program_source(char** programSource, const char* programName);
 void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queue, cl_context* contextPtr);

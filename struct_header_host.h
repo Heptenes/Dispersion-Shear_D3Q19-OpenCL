@@ -1,6 +1,4 @@
-#define WORD_STRING_SIZE 64
-#define USE_CONSTANT_BODY_FORCE
-#define DEBUG
+
 
 typedef struct {
 
@@ -10,7 +8,7 @@ typedef struct {
 	cl_int BoundaryConds[3];
     cl_int ViscosityModel;
 	
-} int_param_struct __attribute__((aligned (16)));
+} int_param_struct;
 
 
 typedef struct {
@@ -21,4 +19,4 @@ typedef struct {
 	cl_float VelLower[3];
 	cl_float NewtonianTau;
   
-} flp_param_struct __attribute__((aligned (16)));
+} flp_param_struct;

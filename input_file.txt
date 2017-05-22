@@ -1,4 +1,4 @@
-iterations 20000
+iterations 10000
 console_print_freq 1000
 constant_body_force 0.0 0.000001 0.0
 newtonian_tau 0.9

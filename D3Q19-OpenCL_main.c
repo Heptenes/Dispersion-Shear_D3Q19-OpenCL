@@ -12,8 +12,8 @@ int main(int argc, char *argv[])
 	context = clCreateContext(NULL, 2, devices, NULL, NULL, &error);
 	error_check(error, "clCreateContext", 1);
 	
-    // Create a command queue for CPU and GPU
-    cl_command_queue queueCPU, queueGPU;
+	// Create a command queue for CPU and GPU
+	cl_command_queue queueCPU, queueGPU;
 	
 	queueCPU = clCreateCommandQueue(context, devices[0], 0, &error);
 	error_check(error, "clCreateCommandQueue", 1);
@@ -266,7 +266,8 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 		{N_x-b-1,   N_y-b-1,   N_z-b-1}
 	};
 	
-	int tempMapping[N_x*N_y*N_z][2]; // Max possible size 
+    int* tempMapping;
+    tempMapping = (int*)malloc(N_x*N_y*N_z*2*sizeof(int)); // Max possible size 
 	int numPeriodicNodes = 0;
 	
 	// Write:
@@ -288,8 +289,8 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 					// 1D index of node
 					int i_1D = r[0] + N_x*(r[1] + r[2]*N_y);
 					
-					tempMapping[numPeriodicNodes][0] = i_1D; // 1D index of node in f array
-					tempMapping[numPeriodicNodes][1] = face; // Boundary node type
+					tempMapping[numPeriodicNodes*2    ] = i_1D; // 1D index of node in f array
+					tempMapping[numPeriodicNodes*2 + 1] = face; // Boundary node type
 						
 					numPeriodicNodes++;
 				}
@@ -316,8 +317,8 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 				// 1D index of node
 				int i_1D = r[0] + N_x*(r[1] + r[2]*N_y);
 				
-				tempMapping[numPeriodicNodes][0] = i_1D; // 1D index of node f array
-				tempMapping[numPeriodicNodes][1] = 6 + edge; // Boundary node type
+				tempMapping[numPeriodicNodes*2    ] = i_1D; // 1D index of node f array
+				tempMapping[numPeriodicNodes*2 + 1] = 6 + edge; // Boundary node type
 				
 				numPeriodicNodes++;
 			}
@@ -340,8 +341,8 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 			// 1D index of node
 			int i_1D = r[0] + N_x*(r[1] + r[2]*N_y);
 			
-			tempMapping[numPeriodicNodes][0] = i_1D; // 1D index of node in f array
-			tempMapping[numPeriodicNodes][1] = 18 + vert; // Boundary node type
+			tempMapping[numPeriodicNodes*2    ] = i_1D; // 1D index of node in f array
+			tempMapping[numPeriodicNodes*2 + 1] = 18 + vert; // Boundary node type
 			
 			numPeriodicNodes++;
 		}
@@ -350,9 +351,11 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 	// Copy to mapping array with thread-coalesced memory layout
 	*strMapPtr = (cl_int*)malloc(numPeriodicNodes*2*sizeof(cl_int));
 	for (int node=0; node<numPeriodicNodes; node++) {
-		(*strMapPtr)[                   node] = tempMapping[node][0]; // 1D index
-		(*strMapPtr)[numPeriodicNodes + node] = tempMapping[node][1]; // Boundary node type
+		(*strMapPtr)[                   node] = tempMapping[node*2    ]; // 1D index
+		(*strMapPtr)[numPeriodicNodes + node] = tempMapping[node*2 + 1]; // Boundary node type
 	}
+    
+    free(tempMapping);
 	
 	return numPeriodicNodes;
 }
@@ -789,7 +792,7 @@ void analyse_platform(cl_device_id* devices)
 
 void read_program_source(char** programSourcePtr, const char* programName)
 {
-	FILE* file = fopen(programName, "r");
+	FILE* file = fopen(programName, "rb");
 	fseek(file, 0, SEEK_END);
 	size_t programSize = ftell(file);
 	rewind(file);
@@ -805,7 +808,7 @@ void read_program_source(char** programSourcePtr, const char* programName)
 	fclose(file);
 }
 	
-int error_check(cl_int err, char* clFunc, bool print)
+int error_check(cl_int err, char* clFunc, int print)
 {
 	if(err != CL_SUCCESS) {
 		printf("Call to %s failed (%d):\n", clFunc, err);
@@ -910,16 +913,20 @@ void vecadd_test(int size, cl_device_id* devicePtr, cl_command_queue* queuePtr, 
 	char* programSource = NULL;
 	const char programName[] = "test_program.cl";
 	
-	cl_int error;
+    cl_int error = CL_SUCCESS;
 	cl_program program;
-	
+	cl_kernel kernel;
+    
 	read_program_source(&programSource, programName);
 	program = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSource, NULL, &error);
-	clBuildProgram(program, 1, devicePtr, NULL, NULL, NULL);
-	
-	cl_kernel kernel;
+    error_check(error, "clCreateProgramWithSource", 1);
+ 
+	error = clBuildProgram(program, 1, devicePtr, NULL, NULL, NULL);
+	error_check(error, "clBuildProgram", 1);
+    
 	kernel = clCreateKernel(program, "vecadd", &error);
-	error_check(error, "clCreateKernel", 1);
+	if (!error_check(error, "clCreateKernel vecadd", 1))		
+	print_program_build_log(&program, devicePtr);
 	
 	// Setup and write buffers
 	cl_mem A_d, B_d, C_d;

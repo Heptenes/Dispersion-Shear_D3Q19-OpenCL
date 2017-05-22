@@ -1,4 +1,27 @@
-#include "struct_header_device.h"
+#define USE_CONSTANT_BODY_FORCE
+#define DEBUG
+
+typedef struct {
+
+	int BasisVel[19][3];	
+	int MaxIterations;
+	int LatticeSize[3];
+	int BoundaryConds[3];
+    int ViscosityModel;
+	
+} int_param_struct;
+
+
+typedef struct {
+	
+    float ConstBodyForce[3];
+	float EqWeights[19]; 
+	float VelUpper[3];
+	float VelLower[3];
+	float NewtonianTau;
+  
+} flp_param_struct;
+
 
 void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y, float u_z);
 void stream_locations(int n_x, int n_y, int n_z, int i_x, int i_y, int i_z, int* ind);
