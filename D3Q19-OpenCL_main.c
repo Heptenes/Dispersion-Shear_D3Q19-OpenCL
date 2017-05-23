@@ -688,23 +688,29 @@ void analyse_platform(cl_device_id* devices)
 {
     printf("Analysing platform... \n");
 	
-    cl_int err;
+    cl_int error = CL_SUCCESS;
 
     // Platforms
     cl_uint numPlatforms;
-    err = clGetPlatformIDs(0, NULL, &numPlatforms);
+    error = clGetPlatformIDs(0, NULL, &numPlatforms);
+	error_check(error, "clGetPlatformIDs", 1);
 
     cl_platform_id *platforms = NULL;
     platforms = (cl_platform_id*)malloc(numPlatforms*sizeof(cl_platform_id));
 
-    err = clGetPlatformIDs(numPlatforms, platforms, NULL);
+    error = clGetPlatformIDs(numPlatforms, platforms, NULL);
+	error_check(error, "clGetPlatformIDs", 1);
 
     char *platformName = NULL;
     size_t size = 0;
-    clGetPlatformInfo(platforms[0], CL_PLATFORM_NAME, size, platformName, &size);
+    error = clGetPlatformInfo(platforms[0], CL_PLATFORM_NAME, size, platformName, &size);
     platformName = (char*)malloc(size);
-    clGetPlatformInfo(platforms[0], CL_PLATFORM_NAME, size, platformName, NULL);
-
+    error |= clGetPlatformInfo(platforms[0], CL_PLATFORM_NAME, size, platformName, NULL);
+	error_check(error, "clGetPlatformInfo", 1);
+	if (error != CL_SUCCESS) { 
+		exit(EXIT_FAILURE);
+	}
+	
     printf("There is %i OpenCL platform(s) available, the default is %s \n\n", numPlatforms, platformName);
 	
 	// Process available devices
@@ -712,24 +718,25 @@ void analyse_platform(cl_device_id* devices)
 	cl_uint numGPUs;
 	
 	// CPUs
-	err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_CPU, 0, NULL, &numCPUs);	
+	error = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_CPU, 0, NULL, &numCPUs);	
     cl_device_id *devicePtrCPU = NULL;
     devicePtrCPU = (cl_device_id*)malloc(numCPUs*sizeof(cl_device_id));   
-    err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_CPU, numCPUs, devicePtrCPU, NULL);
+    error |= clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_CPU, numCPUs, devicePtrCPU, NULL);
 
 	// GPUs
-	err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 0, NULL, &numGPUs);
-	
-	if(numGPUs == 0)
-	{
+	error |= clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 0, NULL, &numGPUs);
+	error_check(error, "clGetDeviceIDs", 1);
+	if (error != CL_SUCCESS) { 
+		exit(EXIT_FAILURE);
+	} else if(numGPUs == 0) {
 	    printf("Error: No GPU found \n\n");
 	    exit(EXIT_FAILURE);
     }
 	
     cl_device_id *devicePtrGPU = NULL;
     devicePtrGPU = (cl_device_id*)malloc(numCPUs*sizeof(cl_device_id));   
-	err = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, numCPUs, devicePtrGPU, NULL);	
-
+	error = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, numCPUs, devicePtrGPU, NULL);	
+	
 	// Print CPU information
 	for(int i=0; i < numCPUs; i++)
 	{
