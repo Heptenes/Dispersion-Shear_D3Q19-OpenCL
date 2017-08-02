@@ -1,5 +1,4 @@
 #define USE_CONSTANT_BODY_FORCE
-#define DEBUG
 
 typedef struct {
 
@@ -175,22 +174,42 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 	equilibirum_distribution_D3Q19(f_eq, rho, u_x, u_y, u_z);
 
 	for(int i = 0; i < 19; i++) {
-		d[i] = f_eq[i] - f[i];
+		d[i] = f_eq[i] - f[i]; // Also gives negative of non-equilibrium part
 	}
+	
+	// Compute relaxation times
+#ifdef USE_CONSTANT_VISCOSITY
+	float tau = flpDat->NewtonianTau;
+#else
+	// Use local expression for shear rate tensor
+	float srt[3][3];
+	
+	srt[1][1] = +d[1] +d[2] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14];
+	srt[1][2] = +d[7] -d[8] -d[11] +d[12];
+	srt[1][3] = +d[9] -d[10] -d[13] +d[14];
+	srt[2][1] = +d[7] -d[8] -d[11] +d[12];
+	srt[2][2] = +d[3] +d[4] +d[7] +d[8] +d[11] +d[12] +d[15] +d[16] +d[17] +d[18];
+	srt[2][3] = +d[15] -d[16] -d[17] +d[18];
+	srt[3][1] = +d[9] -d[10] -d[13] +d[14];
+	srt[3][2] = +d[15] -d[16] -d[17] +d[18];
+	srt[3][3] = +d[5] +d[6] +d[9] +d[10] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
+
+#endif
 	
 	// Guo, Zheng & Shi body force term (2002)
 	float fg[19];
 	guo_body_force_term(u_x, u_y, u_z, g_x, g_y, g_z, fg);
 
 	// Moments of f_delta = M*d. (standard f_eq is still used)
-	m[0] = d[0] +d[1] +d[2] +d[3] +d[4] +d[5] +d[6] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
+	// f_eq should enforce some of these to be zero (0,3,5,7)
+	m[0] = 0.0f;
 	m[1] = -30.0f*d[0] -11.0f*d[1] -11.0f*d[2] -11.0f*d[3] -11.0f*d[4] -11.0f*d[5] -11.0f*d[6] +8.0f*d[7] +8.0f*d[8] +8.0f*d[9] +8.0f*d[10] +8.0f*d[11] +8.0f*d[12] +8.0f*d[13] +8.0f*d[14] +8.0f*d[15] +8.0f*d[16] +8.0f*d[17] +8.0f*d[18];
 	m[2] = 12.0f*d[0] -4.0f*d[1] -4.0f*d[2] -4.0f*d[3] -4.0f*d[4] -4.0f*d[5] -4.0f*d[6] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
-	m[3] = d[1] -d[2] +d[7] +d[8] +d[9] +d[10] -d[11] -d[12] -d[13] -d[14];
+	m[3] = 0.0f;
 	m[4] = -4.0f*d[1] +4.0f*d[2] +d[7] +d[8] +d[9] +d[10] -d[11] -d[12] -d[13] -d[14];
-	m[5] = d[3] -d[4] +d[7] -d[8] +d[11] -d[12] +d[15] +d[16] -d[17] -d[18];
+	m[5] = 0.0f;
 	m[6] = -4.0f*d[3] +4.0f*d[4] +d[7] -d[8] +d[11] -d[12] +d[15] +d[16] -d[17] -d[18];
-	m[7] = d[5] -d[6] +d[9] -d[10] +d[13] -d[14] +d[15] -d[16] +d[17] -d[18];
+	m[7] = 0.0f;
 	m[8] = -4.0f*d[5] +4.0f*d[6] +d[9] -d[10] +d[13] -d[14] +d[15] -d[16] +d[17] -d[18];
 	m[9] = 2.0f*d[1] +2.0f*d[2] -d[3] -d[4] -d[5] -d[6] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14] -2.0f*d[15] -2.0f*d[16] -2.0f*d[17] -2.0f*d[18];
 	m[10] = -4.0f*d[1] -4.0f*d[2] +2.0f*d[3] +2.0f*d[4] +2.0f*d[5] +2.0f*d[6] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14] -2.0f*d[15] -2.0f*d[16] -2.0f*d[17] -2.0f*d[18];
@@ -203,6 +222,7 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 	m[17] = -d[7] +d[8] -d[11] +d[12] +d[15] +d[16] -d[17] -d[18];
 	m[18] = d[9] -d[10] +d[13] -d[14] -d[15] +d[16] -d[17] +d[18];
 	
+	// Need to check if any of these are known in advance
 	mg[0] = fg[0] +fg[1] +fg[2] +fg[3] +fg[4] +fg[5] +fg[6] +fg[7] +fg[8] +fg[9] +fg[10] +fg[11] +fg[12] +fg[13] +fg[14] +fg[15] +fg[16] +fg[17] +fg[18];
 	mg[1] = -30.0f*fg[0] -11.0f*fg[1] -11.0f*fg[2] -11.0f*fg[3] -11.0f*fg[4] -11.0f*fg[5] -11.0f*fg[6] +8.0f*fg[7] +8.0f*fg[8] +8.0f*fg[9] +8.0f*fg[10] +8.0f*fg[11] +8.0f*fg[12] +8.0f*fg[13] +8.0f*fg[14] +8.0f*fg[15] +8.0f*fg[16] +8.0f*fg[17] +8.0f*fg[18];
 	mg[2] = 12.0f*fg[0] -4.0f*fg[1] -4.0f*fg[2] -4.0f*fg[3] -4.0f*fg[4] -4.0f*fg[5] -4.0f*fg[6] +fg[7] +fg[8] +fg[9] +fg[10] +fg[11] +fg[12] +fg[13] +fg[14] +fg[15] +fg[16] +fg[17] +fg[18];
@@ -222,18 +242,18 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 	mg[16] = fg[7] +fg[8] -fg[9] -fg[10] -fg[11] -fg[12] +fg[13] +fg[14];
 	mg[17] = -fg[7] +fg[8] -fg[11] +fg[12] +fg[15] +fg[16] -fg[17] -fg[18];
 	mg[18] = fg[9] -fg[10] +fg[13] -fg[14] -fg[15] +fg[16] -fg[17] +fg[18];
-
-	// Relaxation time inverse
-	float tau = flpDat->NewtonianTau;
+	
 	float s[19] = {0.0f, 1.19f, 1.40f, 0.0f, 1.20f, 0.0f, 1.20f, 0.0f, 1.0f/tau, 1.0f/tau, 1.0f/tau, 1.20f, 1.40f, 1.40f, 1.0f/tau, 1.0f/tau, 1.98f, 1.98f, 1.98f};
+
+	int sr[3][3];
 
 	// Relax each moment
 	for(int i = 0; i < 19; i++) {
 		m[i] *= s[i]; // MRT relaxation
-		m[i] += (1.0f - 0.5f*s[i])*mg[i]; // Relaxed guo term
+		m[i] -= 0.5f*s[i]*mg[i]; // Relaxed part of guo term
 	}
 
-	// Convert back
+	// Convert back (this might be more efficient by precalculating common terms)
 	c[0] = 5.2631579E-2f*m[0] -1.2531328E-2f*m[1] +4.7619048E-2f*m[2];
 	c[1] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] +1.0000000E-1f*m[3] -1.0000000E-1f*m[4] +5.5555556E-2f*m[9] -5.5555556E-2f*m[10];
 	c[2] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] -1.0000000E-1f*m[3] +1.0000000E-1f*m[4] +5.5555556E-2f*m[9] -5.5555556E-2f*m[10];
@@ -259,7 +279,7 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 
 	// Propagate to f_s (not taking into account boundary conditions)
 	for (int i=0; i<19; i++) {
-		f_s[streamIndex[i]] = f[i] + c[i];
+		f_s[streamIndex[i]] = f[i] + c[i] + fg[i]; // fg contains non-relaxed part of full Guo term
 	}
 }
 
@@ -473,15 +493,17 @@ __kernel void GPU_boundary_velocity(
 	f_s[ i_1D + tabUn[i_w][4]*N_C ] = f_k[12] + rho*(u_n - u_a2)/6.0f + N_a2;
 }
 
-__kernel void GPU_compute_macro_properties(__global int* f)
+__kernel void GPU_compute_viscosity_local(__global float* f_s,
+	__global int_param_struct* intDat,
+	__global int* streamMapping)
 {
-
+	// Use the local expression for the shear rate tensor in terms of non-equilibrium part of f
+	
+	// Compute f_neq
+	float f_eq[19], f_new[19];
+	
 }
 
-__kernel void GPU_compute_macro_derivatives(__global int* f)
-{
-
-}
 
 void stream_locations(int N_x, int N_y, int N_z, int i_x, int i_y, int i_z, int* index)
 {

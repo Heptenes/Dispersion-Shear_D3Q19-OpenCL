@@ -1,5 +1,3 @@
-
-
 typedef struct {
 
 	cl_int BasisVel[19][3];	

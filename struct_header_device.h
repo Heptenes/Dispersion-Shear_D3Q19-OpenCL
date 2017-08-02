@@ -1,5 +1,3 @@
-
-
 typedef struct {
 
 	int BasisVel[19][3];	
