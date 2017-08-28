@@ -13,7 +13,8 @@
 #define TYPE_FLOAT 1
 #define TYPE_INT_3VEC 2
 #define TYPE_FLOAT_3VEC 3
-#define TYPE_STRING 4
+#define TYPE_FLOAT_4VEC 4
+#define TYPE_STRING 5
 
 #define BC_PERIODIC 0
 #define BC_BOUNCE_BACK 1
@@ -36,9 +37,9 @@
 typedef struct {
 	
 	int consolePrintFreq;
-    char initialDist[WORD_STRING_SIZE];
+	char initialDist[WORD_STRING_SIZE];
 	float initialVel[3];
-  
+	
 } host_param_struct;
 
 typedef struct {
@@ -54,7 +55,7 @@ typedef struct {
 
 typedef struct {
 	
-    char keyword[WORD_STRING_SIZE];
+	char keyword[WORD_STRING_SIZE];
 	int dataType;
 	void* varPtr;
 	char defString[WORD_STRING_SIZE];
@@ -62,23 +63,27 @@ typedef struct {
 } input_data_struct;
 
 
-int LB_main(cl_device_id* devices, 
+int simulation_main(cl_device_id* devices, 
 	cl_command_queue* queueCPU, cl_command_queue* queueGPU, 
 	cl_context* contextPtr);
+void particle_dynamics(host_particle_struct* pDat);
 	
 int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams, host_param_struct* hostParams);
 int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat);
 
-int initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, 
+void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, 
 		flp_param_struct* flpDat, cl_float* f_h, cl_float* g_h, cl_float* u_h);
 int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq);
+
+int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputDefaultSize);
+void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, cl_float* sphereNodesXYZ);
 	
 int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr);
-int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputDefaultSize);
 int write_lattice_field(cl_float* u_h, int_param_struct* intDat);
-int display_input_params(int_param_struct* intParams, flp_param_struct* floatParams);
 
 int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_struct* kernelDat);
+
+int display_input_params(int_param_struct* intParams, flp_param_struct* floatParams);
 int print_program_build_log(cl_program* program, cl_device_id* device);
 
 void analyse_platform(cl_device_id* devices);

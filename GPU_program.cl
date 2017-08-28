@@ -1,4 +1,4 @@
-#define USE_CONSTANT_BODY_FORCE
+#define USE_VARIABLE_BODY_FORCE
 
 typedef struct {
 
@@ -26,103 +26,93 @@ void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y
 void stream_locations(int n_x, int n_y, int n_z, int i_x, int i_y, int i_z, int* ind);
 void guo_body_force_term(float u_x, float u_y, float u_z,
 	float g_x, float g_y, float g_z, float* fGuo);
+void compute_tau(float* params);
 
-__kernel void GPU_collideSRT_stream_D3Q19(
-	__global float* f_c,
-	__global float* f_s,
-	__global float* g,
-	__global float* u,
-	__global int_param_struct* intDat,
-	__global flp_param_struct* flpDat)
+__kernel void fluid_boundary_forces_linear_stencil(
+	__global float* gpf,
+	__global float3* parKinematics, // Move particle data to local in future!
+	__global float3* parForces,
+	__global uint* pointIDs,
+	__global uint* countPoints,
+	__global int_param_struct* intDat)
 {
-	// Get 3D indices
-	int i_x = get_global_id(0); // Using global_work_offset to take buffer layer into account
-	int i_y = get_global_id(1);
-	int i_z = get_global_id(2);
-
-	// Convention: upper-case N for total lattice array size (including buffer)
+	nID = get_global_id(0); // 1D kernel execution
+	int offset = 1; // 1 buffer layer 
+	
+	// Get lattice size info, for writing body force dat
 	int N_x = intDat->LatticeSize[0];
 	int N_y = intDat->LatticeSize[1];
 	int N_z = intDat->LatticeSize[2];
-
-	// 1D index
-	int i_1D = i_x + N_x*(i_y + N_y*i_z);
 	int N_C = N_x*N_y*N_z; // Total nodes
-
-	// Read in f (from f_c) for this cell
-	float f[19];
-
-	// Read f_c from __global to private memory (should be coalesced memory access)
-	float rho = 0.0f;
-	for (int i=0; i<19; i++) {
-		f[i] = f_c[ i_1D + i*N_C ];
-		rho += f[i];
+	
+	// Get particle ID for this node
+	uint parNum = pointIDs[nID];
+	uint pointNum = pointIDs[nID + intDat->TotalSurfPoints];
+	
+	// Get particle kinetmatic data for this node
+	float4 xp, vp, rot, angVel;
+	for(int i = 0; i < 3; i++) {
+		xp = parKinematics[parNum]; // Position
+		vp = parKinematics[parNum + intDat->NumParticles]; // Velocity
+		e1 = parKinematics[parNum + 2*intDat->NumParticles]; // 
+		e2 = parKinematics[parNum + 3*intDat->NumParticles];
+		e3 = parKinematics[parNum + 4*intDat->NumParticles];
+		angVel = parKinematics[parNum + 5*intDat->NumParticles];
 	}
-
-#ifdef USE_CONSTANT_BODY_FORCE
-	float g_x = flpDat->ConstBodyForce[0];
-	float g_y = flpDat->ConstBodyForce[1];
-	float g_z = flpDat->ConstBodyForce[2];
-#else
-	float g_x = g[ i_1D         ];
-	float g_y = g[ i_1D +   N_C ];
-	float g_z = g[ i_1D + 2*N_C ];
-#endif
-
-	// Compute velocity	(J. Stat. Mech. (2010) P01018 convention)
-	// w/ body force contribution (Guo et al. 2002)
-	float u_x = (f[1]-f[2]+f[7]+f[8] +f[9] +f[10]-f[11]-f[12]-f[13]-f[14] + 0.5f*g_x)/rho;
-	float u_y = (f[3]-f[4]+f[7]-f[8] +f[11]-f[12]+f[15]+f[16]-f[17]-f[18] + 0.5f*g_y)/rho;
-	float u_z = (f[5]-f[6]+f[9]-f[10]+f[13]-f[14]+f[15]-f[16]+f[17]-f[18] + 0.5f*g_z)/rho;
-
-	// Write to __global *u
-	u[ i_1D         ] = u_x;
-	u[ i_1D +   N_C ] = u_y;
-	u[ i_1D + 2*N_C ] = u_z;
-
-	// Single relaxtion time (BGK) collision
-	float f_eq[19];
-	equilibirum_distribution_D3Q19(f_eq, rho, u_x, u_y, u_z);
-
-	//for(size_t i = 0; i < 19; ++i) {
-	//	printf("eq dist: %d %e\n", i, f_eq[i]);
-	//}
-
-	int streamIndex[19];
-	stream_locations(N_x, N_y, N_z, i_x, i_y, i_z, streamIndex);
-
-	//for(size_t i = 0; i < 19; ++i) {
-	//	printf("stream loc: %d %d\n", i, streamIndex[i]);
-	//}
-
-	// Guo, Zheng & Shi body force term (2002)
-	float tau = flpDat->NewtonianTau;
-	float fGuo[19];
-	guo_body_force_term(u_x, u_y, u_z, g_x, g_y, g_z, fGuo);
-
-	float pfGuo = (1.0f - 0.5f/tau); // Guo term SRT collision prefactor
-
-	//float guoSum = 0.0;
-	for(int i = 0; i < 19; i++) {
-		fGuo[i] *= pfGuo;
-		//guoSum += fGuo[i];
-		//printf("Guo, guosum %d %e %e\n", i, fGuo[i], guoSum);
+	
+	// Lookup original position of this point relative to particle center
+	float4 r;
+	float4 r2 = (float4)(0.0 0.0 0.0 0.0);
+	
+	// Apply rotaiton
+	r2 = e1*r.x + e2*r.y + e3*r.z;
+	
+	// Absolute position of point
+	rp = r2 + xp;
+	
+	// Adjust for pbc
+	w = (float4)(N_x-3, N_y-3, N_z-3, 0);
+	rp = fmod(rp,w);
+	
+	// Location of 8 neighbours (simples linear interpolation stencil)
+	int xf = floor(rp.x) + offset;
+	int yf = floor(rp.y) + offset;
+	int zf = floor(rp.z) + offset;
+	
+	// Interpolate velocity 
+	
+	
+	// Calculate velocity of node
+	v = vp + cross(angVel,r); // Order is important
+	
+	
+	// Direct forcing velocity delta
+	float4 ud = v 
+	
+	// Distribute force to 8 nodes
+	
+	
+	for(int n = 0; n < 8; n++) {
+		
+		int i_1D = i_x + N_x*(i_y + N_y*i_z);
+		
+		int p = atomic_inc(countPoints[nodeID]); // The p'th time a surface point writes to this node
+		gfp[i_1D + NC*(3*p)    ]; += ud.x;
+		gfp[i_1D + NC*(3*p + 1)]; += ud.y;
+		gfp[i_1D + NC*(3*p + 2)]; += ud.z;
 	}
-
-	// Propagate to f_s (not taking into account boundary conditions)
-	for (int i=0; i<19; i++) {
-		f_s[streamIndex[i]] = f[i] + (f_eq[i]-f[i])/tau + fGuo[i];
-	}
-
+	
 }
 
-__kernel void GPU_collideMRT_stream_D3Q19(
+
+__kernel void collideMRT_stream_D3Q19(
 	__global float* f_c,
 	__global float* f_s,
 	__global float* g,
+	__global float* gpf,
 	__global float* u,
 	__global int_param_struct* intDat,
-	__global flp_param_struct* flpDat)
+	__global flp_param_struct* flpDat) // Params could be const or local if supported
 {
 	// Get 3D indices
 	int i_x = get_global_id(0); // Using global_work_offset to take buffer layer into account
@@ -143,19 +133,26 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 
 	// Read f_c from __global to private memory (should be coalesced memory access)
 	float rho = 0.0f;
-	for (int i=0; i<19; i++) {
+	for (int i = 0; i < 19; i++) {
 		f[i] = f_c[ i_1D + i*N_C ];
 		rho += f[i];
 	}
 
-#ifdef USE_CONSTANT_BODY_FORCE
 	float g_x = flpDat->ConstBodyForce[0];
 	float g_y = flpDat->ConstBodyForce[1];
 	float g_z = flpDat->ConstBodyForce[2];
-#else
-	float g_x = g[ i_1D         ];
-	float g_y = g[ i_1D +   N_C ];
-	float g_z = g[ i_1D + 2*N_C ];
+	
+#ifdef USE_VARIABLE_BODY_FORCE
+
+	// Sum force contributions
+	int N_C3 = N_C*3;
+	
+	for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
+		g_x += gfp[i_1D + NC*(3*p)    ];
+		g_x += gfp[i_1D + NC*(3*p + 1)];
+		g_x += gfp[i_1D + NC*(3*p + 2)];
+	}
+	
 #endif
 
 	// Compute velocity	(J. Stat. Mech. (2010) P01018 convention)
@@ -170,32 +167,13 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 	u[ i_1D + 2*N_C ] = u_z;
 
 	// Multiple relaxtion time (BGK) collision
-	float f_eq[19], d[19], c[19], m[19], mg[19];
+	float f_eq[19], d[19], m[19], sm[19], msm[19], mg[19];
 	equilibirum_distribution_D3Q19(f_eq, rho, u_x, u_y, u_z);
 
 	for(int i = 0; i < 19; i++) {
 		d[i] = f_eq[i] - f[i]; // Also gives negative of non-equilibrium part
 	}
-	
-	// Compute relaxation times
-#ifdef USE_CONSTANT_VISCOSITY
-	float tau = flpDat->NewtonianTau;
-#else
-	// Use local expression for shear rate tensor
-	float srt[3][3];
-	
-	srt[1][1] = +d[1] +d[2] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14];
-	srt[1][2] = +d[7] -d[8] -d[11] +d[12];
-	srt[1][3] = +d[9] -d[10] -d[13] +d[14];
-	srt[2][1] = +d[7] -d[8] -d[11] +d[12];
-	srt[2][2] = +d[3] +d[4] +d[7] +d[8] +d[11] +d[12] +d[15] +d[16] +d[17] +d[18];
-	srt[2][3] = +d[15] -d[16] -d[17] +d[18];
-	srt[3][1] = +d[9] -d[10] -d[13] +d[14];
-	srt[3][2] = +d[15] -d[16] -d[17] +d[18];
-	srt[3][3] = +d[5] +d[6] +d[9] +d[10] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
-
-#endif
-	
+		
 	// Guo, Zheng & Shi body force term (2002)
 	float fg[19];
 	guo_body_force_term(u_x, u_y, u_z, g_x, g_y, g_z, fg);
@@ -243,36 +221,85 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 	mg[17] = -fg[7] +fg[8] -fg[11] +fg[12] +fg[15] +fg[16] -fg[17] -fg[18];
 	mg[18] = fg[9] -fg[10] +fg[13] -fg[14] -fg[15] +fg[16] -fg[17] +fg[18];
 	
-	float s[19] = {0.0f, 1.19f, 1.40f, 0.0f, 1.20f, 0.0f, 1.20f, 0.0f, 1.0f/tau, 1.0f/tau, 1.0f/tau, 1.20f, 1.40f, 1.40f, 1.0f/tau, 1.0f/tau, 1.98f, 1.98f, 1.98f};
+	
+	//
+	
+	
+	float s[19] = {1.0f, 1.19f, 1.40f, 1.0f, 1.20f, 1.0f, 1.20f, 1.0f, 1.0f/tau, 1.0f/tau, 1.0f/tau, 1.20f, 1.40f, 1.40f, 1.0f/tau, 1.0f/tau, 1.98f, 1.98f, 1.98f};
 
 	int sr[3][3];
 
 	// Relax each moment
 	for(int i = 0; i < 19; i++) {
-		m[i] *= s[i]; // MRT relaxation
-		m[i] -= 0.5f*s[i]*mg[i]; // Relaxed part of guo term
+		sm[i] = m[i]*s[i]; // MRT relaxation
+		//m[i] -= 0.5f*s[i]*mg[i]; // Relaxed part of guo term (non-relaxed part added later)
 	}
-
+	
 	// Convert back (this might be more efficient by precalculating common terms)
-	c[0] = 5.2631579E-2f*m[0] -1.2531328E-2f*m[1] +4.7619048E-2f*m[2];
-	c[1] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] +1.0000000E-1f*m[3] -1.0000000E-1f*m[4] +5.5555556E-2f*m[9] -5.5555556E-2f*m[10];
-	c[2] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] -1.0000000E-1f*m[3] +1.0000000E-1f*m[4] +5.5555556E-2f*m[9] -5.5555556E-2f*m[10];
-	c[3] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] +1.0000000E-1f*m[5] -1.0000000E-1f*m[6] -2.7777778E-2f*m[9] +2.7777778E-2f*m[10] +8.3333333E-2f*m[11] -8.3333333E-2f*m[12];
-	c[4] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] -1.0000000E-1f*m[5] +1.0000000E-1f*m[6] -2.7777778E-2f*m[9] +2.7777778E-2f*m[10] +8.3333333E-2f*m[11] -8.3333333E-2f*m[12];
-	c[5] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] +1.0000000E-1f*m[7] -1.0000000E-1f*m[8] -2.7777778E-2f*m[9] +2.7777778E-2f*m[10] -8.3333333E-2f*m[11] +8.3333333E-2f*m[12];
-	c[6] = 5.2631579E-2f*m[0] -4.5948204E-3f*m[1] -1.5873016E-2f*m[2] -1.0000000E-1f*m[7] +1.0000000E-1f*m[8] -2.7777778E-2f*m[9] +2.7777778E-2f*m[10] -8.3333333E-2f*m[11] +8.3333333E-2f*m[12];
-	c[7] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] +1.0000000E-1f*m[3] +2.5000000E-2f*m[4] +1.0000000E-1f*m[5] +2.5000000E-2f*m[6] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] +8.3333333E-2f*m[11] +4.1666667E-2f*m[12] +2.5000000E-1f*m[13] +1.2500000E-1f*m[16] -1.2500000E-1f*m[17];
-	c[8] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] +1.0000000E-1f*m[3] +2.5000000E-2f*m[4] -1.0000000E-1f*m[5] -2.5000000E-2f*m[6] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] +8.3333333E-2f*m[11] +4.1666667E-2f*m[12] -2.5000000E-1f*m[13] +1.2500000E-1f*m[16] +1.2500000E-1f*m[17];
-	c[9] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] +1.0000000E-1f*m[3] +2.5000000E-2f*m[4] +1.0000000E-1f*m[7] +2.5000000E-2f*m[8] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] -8.3333333E-2f*m[11] -4.1666667E-2f*m[12] +2.5000000E-1f*m[15] -1.2500000E-1f*m[16] +1.2500000E-1f*m[18];
-	c[10] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] +1.0000000E-1f*m[3] +2.5000000E-2f*m[4] -1.0000000E-1f*m[7] -2.5000000E-2f*m[8] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] -8.3333333E-2f*m[11] -4.1666667E-2f*m[12] -2.5000000E-1f*m[15] -1.2500000E-1f*m[16] -1.2500000E-1f*m[18];
-	c[11] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] -1.0000000E-1f*m[3] -2.5000000E-2f*m[4] +1.0000000E-1f*m[5] +2.5000000E-2f*m[6] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] +8.3333333E-2f*m[11] +4.1666667E-2f*m[12] -2.5000000E-1f*m[13] -1.2500000E-1f*m[16] -1.2500000E-1f*m[17];
-	c[12] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] -1.0000000E-1f*m[3] -2.5000000E-2f*m[4] -1.0000000E-1f*m[5] -2.5000000E-2f*m[6] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] +8.3333333E-2f*m[11] +4.1666667E-2f*m[12] +2.5000000E-1f*m[13] -1.2500000E-1f*m[16] +1.2500000E-1f*m[17];
-	c[13] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] -1.0000000E-1f*m[3] -2.5000000E-2f*m[4] +1.0000000E-1f*m[7] +2.5000000E-2f*m[8] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] -8.3333333E-2f*m[11] -4.1666667E-2f*m[12] -2.5000000E-1f*m[15] +1.2500000E-1f*m[16] +1.2500000E-1f*m[18];
-	c[14] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] -1.0000000E-1f*m[3] -2.5000000E-2f*m[4] -1.0000000E-1f*m[7] -2.5000000E-2f*m[8] +2.7777778E-2f*m[9] +1.3888889E-2f*m[10] -8.3333333E-2f*m[11] -4.1666667E-2f*m[12] +2.5000000E-1f*m[15] +1.2500000E-1f*m[16] -1.2500000E-1f*m[18];
-	c[15] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] +1.0000000E-1f*m[5] +2.5000000E-2f*m[6] +1.0000000E-1f*m[7] +2.5000000E-2f*m[8] -5.5555556E-2f*m[9] -2.7777778E-2f*m[10] +2.5000000E-1f*m[14] +1.2500000E-1f*m[17] -1.2500000E-1f*m[18];
-	c[16] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] +1.0000000E-1f*m[5] +2.5000000E-2f*m[6] -1.0000000E-1f*m[7] -2.5000000E-2f*m[8] -5.5555556E-2f*m[9] -2.7777778E-2f*m[10] -2.5000000E-1f*m[14] +1.2500000E-1f*m[17] +1.2500000E-1f*m[18];
-	c[17] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] -1.0000000E-1f*m[5] -2.5000000E-2f*m[6] +1.0000000E-1f*m[7] +2.5000000E-2f*m[8] -5.5555556E-2f*m[9] -2.7777778E-2f*m[10] -2.5000000E-1f*m[14] -1.2500000E-1f*m[17] -1.2500000E-1f*m[18];
-	c[18] = 5.2631579E-2f*m[0] +3.3416876E-3f*m[1] +3.9682540E-3f*m[2] -1.0000000E-1f*m[5] -2.5000000E-2f*m[6] -1.0000000E-1f*m[7] -2.5000000E-2f*m[8] -5.5555556E-2f*m[9] -2.7777778E-2f*m[10] +2.5000000E-1f*m[14] -1.2500000E-1f*m[17] +1.2500000E-1f*m[18];
+	msm[0] = 5.2631579E-2f*sm[0] -1.2531328E-2f*sm[1] +4.7619048E-2f*sm[2];
+	msm[1] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] +1.0E-1f*sm[3] -1.0E-1f*sm[4] +5.5555556E-2f*sm[9] -5.5555556E-2f*sm[10];
+	msm[2] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] -1.0E-1f*sm[3] +1.0E-1f*sm[4] +5.5555556E-2f*sm[9] -5.5555556E-2f*sm[10];
+	msm[3] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] +1.0E-1f*sm[5] -1.0E-1f*sm[6] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] +8.3333333E-2f*sm[11] -8.3333333E-2f*sm[12];
+	msm[4] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] -1.0E-1f*sm[5] +1.0E-1f*sm[6] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] +8.3333333E-2f*sm[11] -8.3333333E-2f*sm[12];
+	msm[5] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] +1.0E-1f*sm[7] -1.0E-1f*sm[8] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] -8.3333333E-2f*sm[11] +8.3333333E-2f*sm[12];
+	msm[6] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] -1.0E-1f*sm[7] +1.0E-1f*sm[8] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] -8.3333333E-2f*sm[11] +8.3333333E-2f*sm[12];
+	msm[7] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] +1.0E-1f*sm[5] +2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] +2.5E-1f*sm[13] +1.25E-1f*sm[16] -1.25E-1f*sm[17];
+	msm[8] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] -1.0E-1f*sm[5] -2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] -2.5E-1f*sm[13] +1.25E-1f*sm[16] +1.25E-1f*sm[17];
+	msm[9] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] +1.0E-1f*sm[7] +2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] +2.5E-1f*sm[15] -1.25E-1f*sm[16] +1.25E-1f*sm[18];
+	msm[10] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] -1.0E-1f*sm[7] -2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] -2.5E-1f*sm[15] -1.25E-1f*sm[16] -1.25E-1f*sm[18];
+	msm[11] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] +1.0E-1f*sm[5] +2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] -2.5E-1f*sm[13] -1.25E-1f*sm[16] -1.25E-1f*sm[17];
+	msm[12] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] -1.0E-1f*sm[5] -2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] +2.5E-1f*sm[13] -1.25E-1f*sm[16] +1.25E-1f*sm[17];
+	msm[13] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] +1.0E-1f*sm[7] +2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] -2.5E-1f*sm[15] +1.25E-1f*sm[16] +1.25E-1f*sm[18];
+	msm[14] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] -1.0E-1f*sm[7] -2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] +2.5E-1f*sm[15] +1.25E-1f*sm[16] -1.25E-1f*sm[18];
+	msm[15] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[5] +2.5E-2f*sm[6] +1.0E-1f*sm[7] +2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] +2.5E-1f*sm[14] +1.25E-1f*sm[17] -1.25E-1f*sm[18];
+	msm[16] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[5] +2.5E-2f*sm[6] -1.0E-1f*sm[7] -2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] -2.5E-1f*sm[14] +1.25E-1f*sm[17] +1.25E-1f*sm[18];
+	msm[17] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[5] -2.5E-2f*sm[6] +1.0E-1f*sm[7] +2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] -2.5E-1f*sm[14] -1.25E-1f*sm[17] -1.25E-1f*sm[18];
+	msm[18] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[5] -2.5E-2f*sm[6] -1.0E-1f*sm[7] -2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] +2.5E-1f*sm[14] -1.25E-1f*sm[17] +1.25E-1f*sm[18];
+
+
+	
+	// Compute relaxation times
+#ifdef USE_CONSTANT_VISCOSITY
+	float tau = flpDat->NewtonianTau;
+#else
+	// Use local expression for shear rate tensor, check trace 
+	float ccfeq[3][3];
+	
+	ccfeq[1][1] = +d[1] +d[2] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14];
+	ccfeq[1][2] = +d[7] -d[8] -d[11] +d[12];
+	ccfeq[1][3] = +d[9] -d[10] -d[13] +d[14];
+	ccfeq[2][1] = +d[7] -d[8] -d[11] +d[12];
+	ccfeq[2][2] = +d[3] +d[4] +d[7] +d[8] +d[11] +d[12] +d[15] +d[16] +d[17] +d[18];
+	ccfeq[2][3] = +d[15] -d[16] -d[17] +d[18];
+	ccfeq[3][1] = +d[9] -d[10] -d[13] +d[14];
+	ccfeq[3][2] = +d[15] -d[16] -d[17] +d[18];
+	ccfeq[3][3] = +d[5] +d[6] +d[9] +d[10] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
+	
+	//traceTerm = d[1] +d[2] +d[3] +d[4] +d[5] +d[6] +2.0f*d[7] +2.0f*d[8] +2.0f*d[9] +2.0f*d[10] +2.0f*d[11] +2.0f*d[12] +2.0f*d[13] +2.0f*d[14] +2.0f*d[15] +2.0f*d[16] +2.0f*d[17] +2.0f*d[18];
+	//ccfeq[1][1] -= traceTerm/3.0f;
+	//ccfeq[2][2] -= traceTerm/3.0f;
+	//ccfeq[3][3] -= traceTerm/3.0f;
+	
+	// Shear rate tensor product
+	float srtII = 0.0;
+	for(int i = 0; i < 3; i++) {
+		for(int j = 0; j < 3; j++) {
+			//
+			srttII += ccfeq[i][j]*ccfeq[i][j];
+		}
+	}
+	
+	// Guo term correction?
+	
+	// Second invariant, sqrt(2*1.5^2) = 2.1213203
+	srtII = sqrt(srtII)*2.1213203/(tau*rho)
+	
+	// Tau
+	float tau = compute_tau(&(flpDat->NonNewtonianParams[0]))
+
+#endif
+	
+
 
 	int streamIndex[19];
 	stream_locations(N_x, N_y, N_z, i_x, i_y, i_z, streamIndex);
@@ -283,7 +310,7 @@ __kernel void GPU_collideMRT_stream_D3Q19(
 	}
 }
 
-__kernel void GPU_boundary_periodic(__global float* f_s,
+__kernel void boundary_periodic(__global float* f_s,
 	__global int_param_struct* intDat,
 	__global int* streamMapping)
 {
@@ -394,7 +421,7 @@ __kernel void GPU_boundary_periodic(__global float* f_s,
 	}
 }
 
-__kernel void GPU_boundary_velocity(
+__kernel void boundary_velocity(
 	__global float* f_s,
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat,
@@ -493,7 +520,7 @@ __kernel void GPU_boundary_velocity(
 	f_s[ i_1D + tabUn[i_w][4]*N_C ] = f_k[12] + rho*(u_n - u_a2)/6.0f + N_a2;
 }
 
-__kernel void GPU_compute_viscosity_local(__global float* f_s,
+__kernel void compute_viscosity_local(__global float* f_s,
 	__global int_param_struct* intDat,
 	__global int* streamMapping)
 {
@@ -504,7 +531,89 @@ __kernel void GPU_compute_viscosity_local(__global float* f_s,
 	
 }
 
+__kernel void collideSRT_newtonian_stream_D3Q19(
+	__global float* f_c,
+	__global float* f_s,
+	__global float* g,
+	__global float* u,
+	__global int_param_struct* intDat,
+	__global flp_param_struct* flpDat)
+{
+	// Get 3D indices
+	int i_x = get_global_id(0); // Using global_work_offset to take buffer layer into account
+	int i_y = get_global_id(1);
+	int i_z = get_global_id(2);
 
+	// Convention: upper-case N for total lattice array size (including buffer)
+	int N_x = intDat->LatticeSize[0];
+	int N_y = intDat->LatticeSize[1];
+	int N_z = intDat->LatticeSize[2];
+
+	// 1D index
+	int i_1D = i_x + N_x*(i_y + N_y*i_z);
+	int N_C = N_x*N_y*N_z; // Total nodes
+
+	// Read in f (from f_c) for this cell
+	float f[19];
+
+	// Read f_c from __global to private memory (should be coalesced memory access)
+	float rho = 0.0f;
+	for (int i=0; i<19; i++) {
+		f[i] = f_c[ i_1D + i*N_C ];
+		rho += f[i];
+	}
+
+#ifdef USE_CONSTANT_BODY_FORCE
+	float g_x = flpDat->ConstBodyForce[0];
+	float g_y = flpDat->ConstBodyForce[1];
+	float g_z = flpDat->ConstBodyForce[2];
+#else
+	float g_x = g[ i_1D         ];
+	float g_y = g[ i_1D +   N_C ];
+	float g_z = g[ i_1D + 2*N_C ];
+#endif
+
+	// Compute velocity	(J. Stat. Mech. (2010) P01018 convention)
+	// w/ body force contribution (Guo et al. 2002)
+	float u_x = (f[1]-f[2]+f[7]+f[8] +f[9] +f[10]-f[11]-f[12]-f[13]-f[14] + 0.5f*g_x)/rho;
+	float u_y = (f[3]-f[4]+f[7]-f[8] +f[11]-f[12]+f[15]+f[16]-f[17]-f[18] + 0.5f*g_y)/rho;
+	float u_z = (f[5]-f[6]+f[9]-f[10]+f[13]-f[14]+f[15]-f[16]+f[17]-f[18] + 0.5f*g_z)/rho;
+
+	// Write to __global *u
+	u[ i_1D         ] = u_x;
+	u[ i_1D +   N_C ] = u_y;
+	u[ i_1D + 2*N_C ] = u_z;
+
+	// Single relaxtion time (BGK) collision
+	float f_eq[19];
+	equilibirum_distribution_D3Q19(f_eq, rho, u_x, u_y, u_z);
+
+	int streamIndex[19];
+	stream_locations(N_x, N_y, N_z, i_x, i_y, i_z, streamIndex);
+
+	// Guo, Zheng & Shi body force term (2002)
+	float tau = flpDat->NewtonianTau;
+	float fGuo[19];
+	guo_body_force_term(u_x, u_y, u_z, g_x, g_y, g_z, fGuo);
+
+	float pfGuo = (1.0f - 0.5f/tau); // Guo term SRT collision prefactor
+
+	//float guoSum = 0.0;
+	for(int i = 0; i < 19; i++) {
+		fGuo[i] *= pfGuo;
+		//guoSum += fGuo[i];
+		//printf("Guo, guosum %d %e %e\n", i, fGuo[i], guoSum);
+	}
+
+	// Propagate to f_s (not taking into account boundary conditions)
+	for (int i=0; i<19; i++) {
+		f_s[streamIndex[i]] = f[i] + (f_eq[i]-f[i])/tau + fGuo[i];
+	}
+
+}
+
+
+// Helper functions
 void stream_locations(int N_x, int N_y, int N_z, int i_x, int i_y, int i_z, int* index)
 {
 	int i_1D = i_x + N_x*(i_y + N_y*i_z);
@@ -563,6 +672,7 @@ void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y
 
 }
 
+// Guo body force term before any relaxation factor applied
 void guo_body_force_term(float u_x, float u_y, float u_z,
 	float g_x, float g_y, float g_z, float* fGuo)
 {
@@ -591,5 +701,14 @@ void guo_body_force_term(float u_x, float u_y, float u_z,
 	fGuo[17] = (-g_y+g_z - uDg + 3.0f*(-u_y+u_z)*(-g_y+g_z) )/12.0f;
 	fGuo[18] = (-g_y-g_z - uDg + 3.0f*(-u_y-u_z)*(-g_y-g_z) )/12.0f;
 
+}
+
+// Casson
+void compute_tau(float* nonNewtonianParams)
+{
+	float sigma_y = nonNewtonianParams[0];
+	float eta_inf = nonNewtonianParams[1];
+	
+	
 }
 
