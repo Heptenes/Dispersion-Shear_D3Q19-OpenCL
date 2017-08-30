@@ -24,6 +24,10 @@
 
 #define LB_Q 19
 
+#ifndef M_PI
+    #define M_PI 3.14159265358979323846
+#endif
+
 // X-macros
 #define LIST_OF_KERNELS \
     X(GPU_collideSRT_stream_D3Q19) \
@@ -35,17 +39,20 @@
 
 // Structs not used by kernel programs declared here
 typedef struct {
-	
-	int consolePrintFreq;
-	char initialDist[WORD_STRING_SIZE];
-	float initialVel[3];
-	
+
+	int ConsolePrintFreq;
+	char InitialDist[WORD_STRING_SIZE];
+	float InitialVel[3];
+    int InitialParticleDistribution;
+    float InitialParticleBuffer;
+    int InterpOrderIBM;
+
 } host_param_struct;
 
 typedef struct {
 #define X(kernelName) cl_kernel kernelName;
 	LIST_OF_KERNELS
-#undef X  
+#undef X
 } kernel_struct;
 
 typedef struct {
@@ -54,30 +61,31 @@ typedef struct {
 } kernel_data_struct;
 
 typedef struct {
-	
+
 	char keyword[WORD_STRING_SIZE];
 	int dataType;
 	void* varPtr;
 	char defString[WORD_STRING_SIZE];
-	
+
 } input_data_struct;
 
 
-int simulation_main(cl_device_id* devices, 
-	cl_command_queue* queueCPU, cl_command_queue* queueGPU, 
+int simulation_main(cl_device_id* devices, cl_command_queue* queueCPU, cl_command_queue* queueGPU,
 	cl_context* contextPtr);
-void particle_dynamics(host_particle_struct* pDat);
-	
+void particle_dynamics(int_param_struct* intDat, cl_float4* parKinematics_h, cl_float4* parForces_h);
+
 int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams, host_param_struct* hostParams);
 int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat);
 
-void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, 
-		flp_param_struct* flpDat, cl_float* f_h, cl_float* g_h, cl_float* u_h);
+void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
+    cl_float* f_h, cl_float* g_h, cl_float* u_h);
+void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
+	cl_float4* parKinematics_h, cl_float4* parForces_h, cl_uint* pointIDs_h);
 int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq);
 
 int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputDefaultSize);
-void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, cl_float* sphereNodesXYZ);
-	
+void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, cl_float4* sphereNodesXYZ);
+
 int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr);
 int write_lattice_field(cl_float* u_h, int_param_struct* intDat);
 

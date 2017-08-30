@@ -1,5 +1,10 @@
-__kernel void CPU_sphere_collide(int x)
+__kernel void particle_dynamics(int_param_struct* intDat, cl_float4* parKinematics_h, cl_float4* parForces_h)
 {
-	int i = get_global_id(0);
-	x = i+1;
+
+}
+
+
+__kernel void update_particle_zones(int_param_struct* intDat, cl_float4* parKinematics_h, cl_float4* parForces_h)
+{
+
 }

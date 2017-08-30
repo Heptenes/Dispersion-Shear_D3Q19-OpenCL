@@ -37,71 +37,71 @@ __kernel void fluid_boundary_forces_linear_stencil(
 	__global int_param_struct* intDat)
 {
 	nID = get_global_id(0); // 1D kernel execution
-	int offset = 1; // 1 buffer layer 
-	
+	int offset = 1; // 1 buffer layer
+
 	// Get lattice size info, for writing body force dat
 	int N_x = intDat->LatticeSize[0];
 	int N_y = intDat->LatticeSize[1];
 	int N_z = intDat->LatticeSize[2];
 	int N_C = N_x*N_y*N_z; // Total nodes
-	
+
 	// Get particle ID for this node
 	uint parNum = pointIDs[nID];
 	uint pointNum = pointIDs[nID + intDat->TotalSurfPoints];
-	
+
 	// Get particle kinetmatic data for this node
 	float4 xp, vp, rot, angVel;
 	for(int i = 0; i < 3; i++) {
 		xp = parKinematics[parNum]; // Position
 		vp = parKinematics[parNum + intDat->NumParticles]; // Velocity
-		e1 = parKinematics[parNum + 2*intDat->NumParticles]; // 
+		e1 = parKinematics[parNum + 2*intDat->NumParticles]; //
 		e2 = parKinematics[parNum + 3*intDat->NumParticles];
 		e3 = parKinematics[parNum + 4*intDat->NumParticles];
 		angVel = parKinematics[parNum + 5*intDat->NumParticles];
 	}
-	
+
 	// Lookup original position of this point relative to particle center
 	float4 r;
 	float4 r2 = (float4)(0.0 0.0 0.0 0.0);
-	
+
 	// Apply rotaiton
 	r2 = e1*r.x + e2*r.y + e3*r.z;
-	
+
 	// Absolute position of point
 	rp = r2 + xp;
-	
+
 	// Adjust for pbc
 	w = (float4)(N_x-3, N_y-3, N_z-3, 0);
 	rp = fmod(rp,w);
-	
+
 	// Location of 8 neighbours (simples linear interpolation stencil)
 	int xf = floor(rp.x) + offset;
 	int yf = floor(rp.y) + offset;
 	int zf = floor(rp.z) + offset;
-	
-	// Interpolate velocity 
-	
-	
+
+	// Interpolate velocity
+
+
 	// Calculate velocity of node
 	v = vp + cross(angVel,r); // Order is important
-	
-	
+
+
 	// Direct forcing velocity delta
-	float4 ud = v 
-	
+	float4 ud = v
+
 	// Distribute force to 8 nodes
-	
-	
+
+
 	for(int n = 0; n < 8; n++) {
-		
+
 		int i_1D = i_x + N_x*(i_y + N_y*i_z);
-		
+
 		int p = atomic_inc(countPoints[nodeID]); // The p'th time a surface point writes to this node
 		gfp[i_1D + NC*(3*p)    ]; += ud.x;
 		gfp[i_1D + NC*(3*p + 1)]; += ud.y;
 		gfp[i_1D + NC*(3*p + 2)]; += ud.z;
 	}
-	
+
 }
 
 
@@ -141,18 +141,18 @@ __kernel void collideMRT_stream_D3Q19(
 	float g_x = flpDat->ConstBodyForce[0];
 	float g_y = flpDat->ConstBodyForce[1];
 	float g_z = flpDat->ConstBodyForce[2];
-	
+
 #ifdef USE_VARIABLE_BODY_FORCE
 
 	// Sum force contributions
 	int N_C3 = N_C*3;
-	
+
 	for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
 		g_x += gfp[i_1D + NC*(3*p)    ];
 		g_x += gfp[i_1D + NC*(3*p + 1)];
 		g_x += gfp[i_1D + NC*(3*p + 2)];
 	}
-	
+
 #endif
 
 	// Compute velocity	(J. Stat. Mech. (2010) P01018 convention)
@@ -173,7 +173,7 @@ __kernel void collideMRT_stream_D3Q19(
 	for(int i = 0; i < 19; i++) {
 		d[i] = f_eq[i] - f[i]; // Also gives negative of non-equilibrium part
 	}
-		
+
 	// Guo, Zheng & Shi body force term (2002)
 	float fg[19];
 	guo_body_force_term(u_x, u_y, u_z, g_x, g_y, g_z, fg);
@@ -199,7 +199,7 @@ __kernel void collideMRT_stream_D3Q19(
 	m[16] = d[7] +d[8] -d[9] -d[10] -d[11] -d[12] +d[13] +d[14];
 	m[17] = -d[7] +d[8] -d[11] +d[12] +d[15] +d[16] -d[17] -d[18];
 	m[18] = d[9] -d[10] +d[13] -d[14] -d[15] +d[16] -d[17] +d[18];
-	
+
 	// Need to check if any of these are known in advance
 	mg[0] = fg[0] +fg[1] +fg[2] +fg[3] +fg[4] +fg[5] +fg[6] +fg[7] +fg[8] +fg[9] +fg[10] +fg[11] +fg[12] +fg[13] +fg[14] +fg[15] +fg[16] +fg[17] +fg[18];
 	mg[1] = -30.0f*fg[0] -11.0f*fg[1] -11.0f*fg[2] -11.0f*fg[3] -11.0f*fg[4] -11.0f*fg[5] -11.0f*fg[6] +8.0f*fg[7] +8.0f*fg[8] +8.0f*fg[9] +8.0f*fg[10] +8.0f*fg[11] +8.0f*fg[12] +8.0f*fg[13] +8.0f*fg[14] +8.0f*fg[15] +8.0f*fg[16] +8.0f*fg[17] +8.0f*fg[18];
@@ -220,11 +220,11 @@ __kernel void collideMRT_stream_D3Q19(
 	mg[16] = fg[7] +fg[8] -fg[9] -fg[10] -fg[11] -fg[12] +fg[13] +fg[14];
 	mg[17] = -fg[7] +fg[8] -fg[11] +fg[12] +fg[15] +fg[16] -fg[17] -fg[18];
 	mg[18] = fg[9] -fg[10] +fg[13] -fg[14] -fg[15] +fg[16] -fg[17] +fg[18];
-	
-	
+
+
 	//
-	
-	
+
+
 	float s[19] = {1.0f, 1.19f, 1.40f, 1.0f, 1.20f, 1.0f, 1.20f, 1.0f, 1.0f/tau, 1.0f/tau, 1.0f/tau, 1.20f, 1.40f, 1.40f, 1.0f/tau, 1.0f/tau, 1.98f, 1.98f, 1.98f};
 
 	int sr[3][3];
@@ -234,7 +234,7 @@ __kernel void collideMRT_stream_D3Q19(
 		sm[i] = m[i]*s[i]; // MRT relaxation
 		//m[i] -= 0.5f*s[i]*mg[i]; // Relaxed part of guo term (non-relaxed part added later)
 	}
-	
+
 	// Convert back (this might be more efficient by precalculating common terms)
 	msm[0] = 5.2631579E-2f*sm[0] -1.2531328E-2f*sm[1] +4.7619048E-2f*sm[2];
 	msm[1] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] +1.0E-1f*sm[3] -1.0E-1f*sm[4] +5.5555556E-2f*sm[9] -5.5555556E-2f*sm[10];
@@ -257,14 +257,14 @@ __kernel void collideMRT_stream_D3Q19(
 	msm[18] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[5] -2.5E-2f*sm[6] -1.0E-1f*sm[7] -2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] +2.5E-1f*sm[14] -1.25E-1f*sm[17] +1.25E-1f*sm[18];
 
 
-	
+
 	// Compute relaxation times
 #ifdef USE_CONSTANT_VISCOSITY
 	float tau = flpDat->NewtonianTau;
 #else
-	// Use local expression for shear rate tensor, check trace 
+	// Use local expression for shear rate tensor, check trace
 	float ccfeq[3][3];
-	
+
 	ccfeq[1][1] = +d[1] +d[2] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14];
 	ccfeq[1][2] = +d[7] -d[8] -d[11] +d[12];
 	ccfeq[1][3] = +d[9] -d[10] -d[13] +d[14];
@@ -274,12 +274,12 @@ __kernel void collideMRT_stream_D3Q19(
 	ccfeq[3][1] = +d[9] -d[10] -d[13] +d[14];
 	ccfeq[3][2] = +d[15] -d[16] -d[17] +d[18];
 	ccfeq[3][3] = +d[5] +d[6] +d[9] +d[10] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
-	
+
 	//traceTerm = d[1] +d[2] +d[3] +d[4] +d[5] +d[6] +2.0f*d[7] +2.0f*d[8] +2.0f*d[9] +2.0f*d[10] +2.0f*d[11] +2.0f*d[12] +2.0f*d[13] +2.0f*d[14] +2.0f*d[15] +2.0f*d[16] +2.0f*d[17] +2.0f*d[18];
 	//ccfeq[1][1] -= traceTerm/3.0f;
 	//ccfeq[2][2] -= traceTerm/3.0f;
 	//ccfeq[3][3] -= traceTerm/3.0f;
-	
+
 	// Shear rate tensor product
 	float srtII = 0.0;
 	for(int i = 0; i < 3; i++) {
@@ -288,17 +288,17 @@ __kernel void collideMRT_stream_D3Q19(
 			srttII += ccfeq[i][j]*ccfeq[i][j];
 		}
 	}
-	
+
 	// Guo term correction?
-	
+
 	// Second invariant, sqrt(2*1.5^2) = 2.1213203
 	srtII = sqrt(srtII)*2.1213203/(tau*rho)
-	
+
 	// Tau
 	float tau = compute_tau(&(flpDat->NonNewtonianParams[0]))
 
 #endif
-	
+
 
 
 	int streamIndex[19];
@@ -525,10 +525,10 @@ __kernel void compute_viscosity_local(__global float* f_s,
 	__global int* streamMapping)
 {
 	// Use the local expression for the shear rate tensor in terms of non-equilibrium part of f
-	
+
 	// Compute f_neq
 	float f_eq[19], f_new[19];
-	
+
 }
 
 __kernel void collideSRT_newtonian_stream_D3Q19(
@@ -708,7 +708,6 @@ void compute_tau(float* nonNewtonianParams)
 {
 	float sigma_y = nonNewtonianParams[0];
 	float eta_inf = nonNewtonianParams[1];
-	
-	
-}
 
+
+}
