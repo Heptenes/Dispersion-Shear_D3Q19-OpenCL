@@ -1,42 +1,33 @@
-#define USE_VARIABLE_BODY_FORCE
+//#define USE_VARIABLE_BODY_FORCE
 
-typedef struct {
+#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
 
-	int BasisVel[19][3];
-	int MaxIterations;
-	int LatticeSize[3];
-	int BoundaryConds[3];
-    int ViscosityModel;
+#ifdef MY_USE_DOUBLE_PRECISION
+typedef double Real;
+#else
+typedef float Real;
+#endif
 
-} int_param_struct;
+#define CASSON
+#define MIN_TAU 0.505
 
-
-typedef struct {
-
-    float ConstBodyForce[3];
-	float EqWeights[19];
-	float VelUpper[3];
-	float VelLower[3];
-	float NewtonianTau;
-
-} flp_param_struct;
-
+#include "struct_header_device.h"
 
 void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y, float u_z);
 void stream_locations(int n_x, int n_y, int n_z, int i_x, int i_y, int i_z, int* ind);
 void guo_body_force_term(float u_x, float u_y, float u_z,
 	float g_x, float g_y, float g_z, float* fGuo);
-void compute_tau(float* params);
+float compute_tau(float srtII, __global float* params);
 
 __kernel void fluid_boundary_forces_linear_stencil(
 	__global float* gpf,
-	__global float3* parKinematics, // Move particle data to local in future!
-	__global float3* parForces,
+	__global float4* parKinematics, // Move particle data to local in future!
+	__global float4* parForces,
 	__global uint* pointIDs,
 	__global uint* countPoints,
 	__global int_param_struct* intDat)
 {
-	nID = get_global_id(0); // 1D kernel execution
+	int nID = get_global_id(0); // 1D kernel execution
 	int offset = 1; // 1 buffer layer
 
 	// Get lattice size info, for writing body force dat
@@ -47,10 +38,10 @@ __kernel void fluid_boundary_forces_linear_stencil(
 
 	// Get particle ID for this node
 	uint parNum = pointIDs[nID];
-	uint pointNum = pointIDs[nID + intDat->TotalSurfPoints];
+	//uint pointNum = pointIDs[nID + intDat->TotalSurfPoints];
 
 	// Get particle kinetmatic data for this node
-	float4 xp, vp, rot, angVel;
+	float4 xp, vp, e1, e2, e3, angVel;
 	for(int i = 0; i < 3; i++) {
 		xp = parKinematics[parNum]; // Position
 		vp = parKinematics[parNum + intDat->NumParticles]; // Velocity
@@ -62,44 +53,55 @@ __kernel void fluid_boundary_forces_linear_stencil(
 
 	// Lookup original position of this point relative to particle center
 	float4 r;
-	float4 r2 = (float4)(0.0 0.0 0.0 0.0);
+	float4 r2 = (float4){0.0, 0.0, 0.0, 0.0};
 
 	// Apply rotaiton
 	r2 = e1*r.x + e2*r.y + e3*r.z;
 
 	// Absolute position of point
-	rp = r2 + xp;
+	float4 rp = xp + r2;
 
 	// Adjust for pbc
-	w = (float4)(N_x-3, N_y-3, N_z-3, 0);
-	rp = fmod(rp,w);
+	float4 w = (float4)(N_x-3, N_y-3, N_z-3, 0);
+	float4 rpp = fmod(rp,w);
 
-	// Location of 8 neighbours (simples linear interpolation stencil)
-	int xf = floor(rp.x) + offset;
-	int yf = floor(rp.y) + offset;
-	int zf = floor(rp.z) + offset;
-
+	// Location of corner closest to origin
+	int i_xf = floor(rpp.x) + offset;
+	int i_yf = floor(rpp.y) + offset;
+	int i_zf = floor(rpp.z) + offset;
+	
+	// Stencil weightings
+	int sten[8][3] = {{0,0,0}, {0,0,1}, {0,1,0}, {0,1,1}, {1,0,0}, {1,0,1}, {1,1,0}, {1,1,1}};
+	float wn[8];
+	
+	for(int n = 0; n < 8; n++) {
+		wn[n] = 0.0;
+	}
+	
 	// Interpolate velocity
-
+	float4 u;
 
 	// Calculate velocity of node
-	v = vp + cross(angVel,r); // Order is important
+	float4 v = vp + cross(angVel,r); // Order is important
 
 
 	// Direct forcing velocity delta
-	float4 ud = v
+	float4 ud = v - u;
 
 	// Distribute force to 8 nodes
 
-
+	
 	for(int n = 0; n < 8; n++) {
 
-		int i_1D = i_x + N_x*(i_y + N_y*i_z);
-
-		int p = atomic_inc(countPoints[nodeID]); // The p'th time a surface point writes to this node
-		gfp[i_1D + NC*(3*p)    ]; += ud.x;
-		gfp[i_1D + NC*(3*p + 1)]; += ud.y;
-		gfp[i_1D + NC*(3*p + 2)]; += ud.z;
+		int dx = sten[n][0];
+		int dy = sten[n][1];
+		int dz = sten[n][2];
+		int i_n = (i_xf+dx) + N_x*((i_yf+dy) + N_y*(i_zf+dz));
+		
+		int p = atomic_inc(&countPoints[i_n]); // The p'th time a surface point writes to this node
+		gpf[i_n + N_C*(3*p)    ] += ud.x;
+		gpf[i_n + N_C*(3*p + 1)] += ud.y;
+		gpf[i_n + N_C*(3*p + 2)] += ud.z;
 	}
 
 }
@@ -108,12 +110,14 @@ __kernel void fluid_boundary_forces_linear_stencil(
 __kernel void collideMRT_stream_D3Q19(
 	__global float* f_c,
 	__global float* f_s,
-	__global float* g,
 	__global float* gpf,
 	__global float* u,
+	__global float* tau_p,
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat) // Params could be const or local if supported
 {
+	//printf(">> collideMRT_stream_D3Q19 <<");
+	
 	// Get 3D indices
 	int i_x = get_global_id(0); // Using global_work_offset to take buffer layer into account
 	int i_y = get_global_id(1);
@@ -147,10 +151,11 @@ __kernel void collideMRT_stream_D3Q19(
 	// Sum force contributions
 	int N_C3 = N_C*3;
 
+	// Try partial sum instead
 	for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
 		g_x += gfp[i_1D + NC*(3*p)    ];
-		g_x += gfp[i_1D + NC*(3*p + 1)];
-		g_x += gfp[i_1D + NC*(3*p + 2)];
+		g_y += gfp[i_1D + NC*(3*p + 1)];
+		g_z += gfp[i_1D + NC*(3*p + 2)];
 	}
 
 #endif
@@ -167,40 +172,40 @@ __kernel void collideMRT_stream_D3Q19(
 	u[ i_1D + 2*N_C ] = u_z;
 
 	// Multiple relaxtion time (BGK) collision
-	float f_eq[19], d[19], m[19], sm[19], msm[19], mg[19];
+	float f_eq[19], n[19], mn[19], smn[19], msmn[19], mg[19], smg[19], msmg[19]; // Could reduce memory requirement
 	equilibirum_distribution_D3Q19(f_eq, rho, u_x, u_y, u_z);
 
 	for(int i = 0; i < 19; i++) {
-		d[i] = f_eq[i] - f[i]; // Also gives negative of non-equilibrium part
+		n[i] = f_eq[i] - f[i]; // Also gives negative of non-equilibrium part
+		//printf("feq,f,n = %f, %f, %f\n", f_eq[i], f[i], n[i]);
 	}
 
 	// Guo, Zheng & Shi body force term (2002)
 	float fg[19];
 	guo_body_force_term(u_x, u_y, u_z, g_x, g_y, g_z, fg);
 
-	// Moments of f_delta = M*d. (standard f_eq is still used)
-	// f_eq should enforce some of these to be zero (0,3,5,7)
-	m[0] = 0.0f;
-	m[1] = -30.0f*d[0] -11.0f*d[1] -11.0f*d[2] -11.0f*d[3] -11.0f*d[4] -11.0f*d[5] -11.0f*d[6] +8.0f*d[7] +8.0f*d[8] +8.0f*d[9] +8.0f*d[10] +8.0f*d[11] +8.0f*d[12] +8.0f*d[13] +8.0f*d[14] +8.0f*d[15] +8.0f*d[16] +8.0f*d[17] +8.0f*d[18];
-	m[2] = 12.0f*d[0] -4.0f*d[1] -4.0f*d[2] -4.0f*d[3] -4.0f*d[4] -4.0f*d[5] -4.0f*d[6] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
-	m[3] = 0.0f;
-	m[4] = -4.0f*d[1] +4.0f*d[2] +d[7] +d[8] +d[9] +d[10] -d[11] -d[12] -d[13] -d[14];
-	m[5] = 0.0f;
-	m[6] = -4.0f*d[3] +4.0f*d[4] +d[7] -d[8] +d[11] -d[12] +d[15] +d[16] -d[17] -d[18];
-	m[7] = 0.0f;
-	m[8] = -4.0f*d[5] +4.0f*d[6] +d[9] -d[10] +d[13] -d[14] +d[15] -d[16] +d[17] -d[18];
-	m[9] = 2.0f*d[1] +2.0f*d[2] -d[3] -d[4] -d[5] -d[6] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14] -2.0f*d[15] -2.0f*d[16] -2.0f*d[17] -2.0f*d[18];
-	m[10] = -4.0f*d[1] -4.0f*d[2] +2.0f*d[3] +2.0f*d[4] +2.0f*d[5] +2.0f*d[6] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14] -2.0f*d[15] -2.0f*d[16] -2.0f*d[17] -2.0f*d[18];
-	m[11] = d[3] +d[4] -d[5] -d[6] +d[7] +d[8] -d[9] -d[10] +d[11] +d[12] -d[13] -d[14];
-	m[12] = -2.0f*d[3] -2.0f*d[4] +2.0f*d[5] +2.0f*d[6] +d[7] +d[8] -d[9] -d[10] +d[11] +d[12] -d[13] -d[14];
-	m[13] = d[7] -d[8] -d[11] +d[12];
-	m[14] = d[15] -d[16] -d[17] +d[18];
-	m[15] = d[9] -d[10] -d[13] +d[14];
-	m[16] = d[7] +d[8] -d[9] -d[10] -d[11] -d[12] +d[13] +d[14];
-	m[17] = -d[7] +d[8] -d[11] +d[12] +d[15] +d[16] -d[17] -d[18];
-	m[18] = d[9] -d[10] +d[13] -d[14] -d[15] +d[16] -d[17] +d[18];
+	// Moments of f_neq and Guo force term
+	mn[0] = 0.0; // rho_eq = rho regardless of forcing
+	mn[1] = -30.0f*n[0] -11.0f*n[1] -11.0f*n[2] -11.0f*n[3] -11.0f*n[4] -11.0f*n[5] -11.0f*n[6] +8.0f*n[7] +8.0f*n[8] +8.0f*n[9] +8.0f*n[10] +8.0f*n[11] +8.0f*n[12] +8.0f*n[13] +8.0f*n[14] +8.0f*n[15] +8.0f*n[16] +8.0f*n[17] +8.0f*n[18];
+	mn[2] = 12.0f*n[0] -4.0f*n[1] -4.0f*n[2] -4.0f*n[3] -4.0f*n[4] -4.0f*n[5] -4.0f*n[6] +n[7] +n[8] +n[9] +n[10] +n[11] +n[12] +n[13] +n[14] +n[15] +n[16] +n[17] +n[18];
+	mn[3] = +n[1] -n[2] +n[7] +n[8] +n[9] +n[10] -n[11] -n[12] -n[13] -n[14];
+	mn[4] = -4.0f*n[1] +4.0f*n[2] +n[7] +n[8] +n[9] +n[10] -n[11] -n[12] -n[13] -n[14];
+	mn[5] = +n[3] -n[4] +n[7] -n[8] +n[11] -n[12] +n[15] +n[16] -n[17] -n[18];
+	mn[6] = -4.0f*n[3] +4.0f*n[4] +n[7] -n[8] +n[11] -n[12] +n[15] +n[16] -n[17] -n[18];
+	mn[7] = +n[5] -n[6] +n[9] -n[10] +n[13] -n[14] +n[15] -n[16] +n[17] -n[18];
+	mn[8] = -4.0f*n[5] +4.0f*n[6] +n[9] -n[10] +n[13] -n[14] +n[15] -n[16] +n[17] -n[18];
+	mn[9] = +2.0f*n[1] +2.0f*n[2] -n[3] -n[4] -n[5] -n[6] +n[7] +n[8] +n[9] +n[10] +n[11] +n[12] +n[13] +n[14] -2.0f*n[15] -2.0f*n[16] -2.0f*n[17] -2.0f*n[18];
+	mn[10] = -4.0f*n[1] -4.0f*n[2] +2.0f*n[3] +2.0f*n[4] +2.0f*n[5] +2.0f*n[6] +n[7] +n[8] +n[9] +n[10] +n[11] +n[12] +n[13] +n[14] -2.0f*n[15] -2.0f*n[16] -2.0f*n[17] -2.0f*n[18];
+	mn[11] = +n[3] +n[4] -n[5] -n[6] +n[7] +n[8] -n[9] -n[10] +n[11] +n[12] -n[13] -n[14];
+	mn[12] = -2.0f*n[3] -2.0f*n[4] +2.0f*n[5] +2.0f*n[6] +n[7] +n[8] -n[9] -n[10] +n[11] +n[12] -n[13] -n[14];
+	mn[13] = +n[7] -n[8] -n[11] +n[12];
+	mn[14] = +n[15] -n[16] -n[17] +n[18];
+	mn[15] = +n[9] -n[10] -n[13] +n[14];
+	mn[16] = +n[7] +n[8] -n[9] -n[10] -n[11] -n[12] +n[13] +n[14];
+	mn[17] = -n[7] +n[8] -n[11] +n[12] +n[15] +n[16] -n[17] -n[18];
+	mn[18] = +n[9] -n[10] +n[13] -n[14] -n[15] +n[16] -n[17] +n[18];
 
-	// Need to check if any of these are known in advance
+	// These expressions for the moments could be simplified
 	mg[0] = fg[0] +fg[1] +fg[2] +fg[3] +fg[4] +fg[5] +fg[6] +fg[7] +fg[8] +fg[9] +fg[10] +fg[11] +fg[12] +fg[13] +fg[14] +fg[15] +fg[16] +fg[17] +fg[18];
 	mg[1] = -30.0f*fg[0] -11.0f*fg[1] -11.0f*fg[2] -11.0f*fg[3] -11.0f*fg[4] -11.0f*fg[5] -11.0f*fg[6] +8.0f*fg[7] +8.0f*fg[8] +8.0f*fg[9] +8.0f*fg[10] +8.0f*fg[11] +8.0f*fg[12] +8.0f*fg[13] +8.0f*fg[14] +8.0f*fg[15] +8.0f*fg[16] +8.0f*fg[17] +8.0f*fg[18];
 	mg[2] = 12.0f*fg[0] -4.0f*fg[1] -4.0f*fg[2] -4.0f*fg[3] -4.0f*fg[4] -4.0f*fg[5] -4.0f*fg[6] +fg[7] +fg[8] +fg[9] +fg[10] +fg[11] +fg[12] +fg[13] +fg[14] +fg[15] +fg[16] +fg[17] +fg[18];
@@ -221,92 +226,182 @@ __kernel void collideMRT_stream_D3Q19(
 	mg[17] = -fg[7] +fg[8] -fg[11] +fg[12] +fg[15] +fg[16] -fg[17] -fg[18];
 	mg[18] = fg[9] -fg[10] +fg[13] -fg[14] -fg[15] +fg[16] -fg[17] +fg[18];
 
-
-	//
-
-
-	float s[19] = {1.0f, 1.19f, 1.40f, 1.0f, 1.20f, 1.0f, 1.20f, 1.0f, 1.0f/tau, 1.0f/tau, 1.0f/tau, 1.20f, 1.40f, 1.40f, 1.0f/tau, 1.0f/tau, 1.98f, 1.98f, 1.98f};
-
-	int sr[3][3];
-
-	// Relax each moment
-	for(int i = 0; i < 19; i++) {
-		sm[i] = m[i]*s[i]; // MRT relaxation
-		//m[i] -= 0.5f*s[i]*mg[i]; // Relaxed part of guo term (non-relaxed part added later)
-	}
-
-	// Convert back (this might be more efficient by precalculating common terms)
-	msm[0] = 5.2631579E-2f*sm[0] -1.2531328E-2f*sm[1] +4.7619048E-2f*sm[2];
-	msm[1] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] +1.0E-1f*sm[3] -1.0E-1f*sm[4] +5.5555556E-2f*sm[9] -5.5555556E-2f*sm[10];
-	msm[2] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] -1.0E-1f*sm[3] +1.0E-1f*sm[4] +5.5555556E-2f*sm[9] -5.5555556E-2f*sm[10];
-	msm[3] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] +1.0E-1f*sm[5] -1.0E-1f*sm[6] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] +8.3333333E-2f*sm[11] -8.3333333E-2f*sm[12];
-	msm[4] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] -1.0E-1f*sm[5] +1.0E-1f*sm[6] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] +8.3333333E-2f*sm[11] -8.3333333E-2f*sm[12];
-	msm[5] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] +1.0E-1f*sm[7] -1.0E-1f*sm[8] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] -8.3333333E-2f*sm[11] +8.3333333E-2f*sm[12];
-	msm[6] = 5.2631579E-2f*sm[0] -4.5948204E-3f*sm[1] -1.5873016E-2f*sm[2] -1.0E-1f*sm[7] +1.0E-1f*sm[8] -2.7777778E-2f*sm[9] +2.7777778E-2f*sm[10] -8.3333333E-2f*sm[11] +8.3333333E-2f*sm[12];
-	msm[7] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] +1.0E-1f*sm[5] +2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] +2.5E-1f*sm[13] +1.25E-1f*sm[16] -1.25E-1f*sm[17];
-	msm[8] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] -1.0E-1f*sm[5] -2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] -2.5E-1f*sm[13] +1.25E-1f*sm[16] +1.25E-1f*sm[17];
-	msm[9] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] +1.0E-1f*sm[7] +2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] +2.5E-1f*sm[15] -1.25E-1f*sm[16] +1.25E-1f*sm[18];
-	msm[10] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[3] +2.5E-2f*sm[4] -1.0E-1f*sm[7] -2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] -2.5E-1f*sm[15] -1.25E-1f*sm[16] -1.25E-1f*sm[18];
-	msm[11] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] +1.0E-1f*sm[5] +2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] -2.5E-1f*sm[13] -1.25E-1f*sm[16] -1.25E-1f*sm[17];
-	msm[12] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] -1.0E-1f*sm[5] -2.5E-2f*sm[6] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] +8.3333333E-2f*sm[11] +4.1666667E-2f*sm[12] +2.5E-1f*sm[13] -1.25E-1f*sm[16] +1.25E-1f*sm[17];
-	msm[13] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] +1.0E-1f*sm[7] +2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] -2.5E-1f*sm[15] +1.25E-1f*sm[16] +1.25E-1f*sm[18];
-	msm[14] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[3] -2.5E-2f*sm[4] -1.0E-1f*sm[7] -2.5E-2f*sm[8] +2.7777778E-2f*sm[9] +1.3888889E-2f*sm[10] -8.3333333E-2f*sm[11] -4.1666667E-2f*sm[12] +2.5E-1f*sm[15] +1.25E-1f*sm[16] -1.25E-1f*sm[18];
-	msm[15] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[5] +2.5E-2f*sm[6] +1.0E-1f*sm[7] +2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] +2.5E-1f*sm[14] +1.25E-1f*sm[17] -1.25E-1f*sm[18];
-	msm[16] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] +1.0E-1f*sm[5] +2.5E-2f*sm[6] -1.0E-1f*sm[7] -2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] -2.5E-1f*sm[14] +1.25E-1f*sm[17] +1.25E-1f*sm[18];
-	msm[17] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[5] -2.5E-2f*sm[6] +1.0E-1f*sm[7] +2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] -2.5E-1f*sm[14] -1.25E-1f*sm[17] -1.25E-1f*sm[18];
-	msm[18] = 5.2631579E-2f*sm[0] +3.3416876E-3f*sm[1] +3.9682540E-3f*sm[2] -1.0E-1f*sm[5] -2.5E-2f*sm[6] -1.0E-1f*sm[7] -2.5E-2f*sm[8] -5.5555556E-2f*sm[9] -2.7777778E-2f*sm[10] +2.5E-1f*sm[14] -1.25E-1f*sm[17] +1.25E-1f*sm[18];
-
-
-
 	// Compute relaxation times
+	// [8], [9], [10], [14], [15] to be set to 1/tau
+	float s[19] = {0.0, 1.19f, 1.40f, 1.0f, 1.20f, 1.0f, 1.20f, 1.0f, 1.0f, 1.0f, 1.0f, 1.20f, 1.40f, 1.40f, 1.0f, 1.0f, 1.98f, 1.98f, 1.98f};
+	
 #ifdef USE_CONSTANT_VISCOSITY
 	float tau = flpDat->NewtonianTau;
+	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
+	s[14] = 1.0f/tau; s[15] = 1.0f/tau;
 #else
-	// Use local expression for shear rate tensor, check trace
-	float ccfeq[3][3];
+	
+	// Compute local expression for shear rate tensor, using tau from previous time step
+	float tau = tau_p[i_1D];
+	
+	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
+	s[14] = 1.0f/tau; s[15] = 1.0f/tau;
+	
+	//printf("TAU prev = %f \n", tau);
+	
+	for(int i = 0; i < 19; i++) {
+		smn[i] = s[i]*mn[i]; // MRT relaxation
+		smg[i] = s[i]*mg[i]; // Relaxed part of guo term (non-relaxed part added later)
+	}
+	
+	// Convert back
+	msmn[0] = 5.2631579E-2f*smn[0] -1.2531328E-2f*smn[1] +4.7619048E-2f*smn[2];
+	msmn[1] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[3] -1.0E-1f*smn[4] +5.5555556E-2f*smn[9] -5.5555556E-2f*smn[10];
+	msmn[2] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] -1.0E-1f*smn[3] +1.0E-1f*smn[4] +5.5555556E-2f*smn[9] -5.5555556E-2f*smn[10];
+	msmn[3] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[5] -1.0E-1f*smn[6] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] +8.3333333E-2f*smn[11] -8.3333333E-2f*smn[12];
+	msmn[4] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] -1.0E-1f*smn[5] +1.0E-1f*smn[6] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] +8.3333333E-2f*smn[11] -8.3333333E-2f*smn[12];
+	msmn[5] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[7] -1.0E-1f*smn[8] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] -8.3333333E-2f*smn[11] +8.3333333E-2f*smn[12];
+	msmn[6] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] -1.0E-1f*smn[7] +1.0E-1f*smn[8] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] -8.3333333E-2f*smn[11] +8.3333333E-2f*smn[12];
+	msmn[7] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] +1.0E-1f*smn[5] +2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] +2.5E-1f*smn[13] +1.25E-1f*smn[16] -1.25E-1f*smn[17];
+	msmn[8] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] -2.5E-1f*smn[13] +1.25E-1f*smn[16] +1.25E-1f*smn[17];
+	msmn[9] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] +1.0E-1f*smn[7] +2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] +2.5E-1f*smn[15] -1.25E-1f*smn[16] +1.25E-1f*smn[18];
+	msmn[10] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] -1.0E-1f*smn[7] -2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] -2.5E-1f*smn[15] -1.25E-1f*smn[16] -1.25E-1f*smn[18];
+	msmn[11] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] +1.0E-1f*smn[5] +2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] -2.5E-1f*smn[13] -1.25E-1f*smn[16] -1.25E-1f*smn[17];
+	msmn[12] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] +2.5E-1f*smn[13] -1.25E-1f*smn[16] +1.25E-1f*smn[17];
+	msmn[13] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] +1.0E-1f*smn[7] +2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] -2.5E-1f*smn[15] +1.25E-1f*smn[16] +1.25E-1f*smn[18];
+	msmn[14] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] -1.0E-1f*smn[7] -2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] +2.5E-1f*smn[15] +1.25E-1f*smn[16] -1.25E-1f*smn[18];
+	msmn[15] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[5] +2.5E-2f*smn[6] +1.0E-1f*smn[7] +2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] +2.5E-1f*smn[14] +1.25E-1f*smn[17] -1.25E-1f*smn[18];
+	msmn[16] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[5] +2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] +1.25E-1f*smn[17] +1.25E-1f*smn[18];
+	msmn[17] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +1.0E-1f*smn[7] +2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] -1.25E-1f*smn[17] -1.25E-1f*smn[18];
+	msmn[18] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] +2.5E-1f*smn[14] -1.25E-1f*smn[17] +1.25E-1f*smn[18];
+	
+	
+	// Convert back
+	msmg[0] = 5.2631579E-2f*smg[0] -1.2531328E-2f*smg[1] +4.7619048E-2f*smg[2];
+	msmg[1] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[3] -1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
+	msmg[2] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[3] +1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
+	msmg[3] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[5] -1.0E-1f*smg[6] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] +8.3333333E-2f*smg[11] -8.3333333E-2f*smg[12];
+	msmg[4] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[5] +1.0E-1f*smg[6] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] +8.3333333E-2f*smg[11] -8.3333333E-2f*smg[12];
+	msmg[5] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[7] -1.0E-1f*smg[8] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] -8.3333333E-2f*smg[11] +8.3333333E-2f*smg[12];
+	msmg[6] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[7] +1.0E-1f*smg[8] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] -8.3333333E-2f*smg[11] +8.3333333E-2f*smg[12];
+	msmg[7] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] +1.0E-1f*smg[5] +2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] +2.5E-1f*smg[13] +1.25E-1f*smg[16] -1.25E-1f*smg[17];
+	msmg[8] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] -1.0E-1f*smg[5] -2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] -2.5E-1f*smg[13] +1.25E-1f*smg[16] +1.25E-1f*smg[17];
+	msmg[9] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] +1.0E-1f*smg[7] +2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] +2.5E-1f*smg[15] -1.25E-1f*smg[16] +1.25E-1f*smg[18];
+	msmg[10] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] -1.0E-1f*smg[7] -2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] -2.5E-1f*smg[15] -1.25E-1f*smg[16] -1.25E-1f*smg[18];
+	msmg[11] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] +1.0E-1f*smg[5] +2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] -2.5E-1f*smg[13] -1.25E-1f*smg[16] -1.25E-1f*smg[17];
+	msmg[12] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] -1.0E-1f*smg[5] -2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] +2.5E-1f*smg[13] -1.25E-1f*smg[16] +1.25E-1f*smg[17];
+	msmg[13] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] +1.0E-1f*smg[7] +2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] -2.5E-1f*smg[15] +1.25E-1f*smg[16] +1.25E-1f*smg[18];
+	msmg[14] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] -1.0E-1f*smg[7] -2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] +2.5E-1f*smg[15] +1.25E-1f*smg[16] -1.25E-1f*smg[18];
+	msmg[15] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[5] +2.5E-2f*smg[6] +1.0E-1f*smg[7] +2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] +2.5E-1f*smg[14] +1.25E-1f*smg[17] -1.25E-1f*smg[18];
+	msmg[16] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[5] +2.5E-2f*smg[6] -1.0E-1f*smg[7] -2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] -2.5E-1f*smg[14] +1.25E-1f*smg[17] +1.25E-1f*smg[18];
+	msmg[17] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[5] -2.5E-2f*smg[6] +1.0E-1f*smg[7] +2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] -2.5E-1f*smg[14] -1.25E-1f*smg[17] -1.25E-1f*smg[18];
+	msmg[18] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[5] -2.5E-2f*smg[6] -1.0E-1f*smg[7] -2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] +2.5E-1f*smg[14] -1.25E-1f*smg[17] +1.25E-1f*smg[18];
+	
+	float ssum[19];
+	for(int i = 0; i < 19; i++) {
+		ssum[i] = msmn[i] + fg[i] - 0.5f*msmg[i];
+	}
+	
+	// Shear rate tensor without prefactor, see Chai and Zhao, PRE 86, 016705 (2012)
+	float scc[3][3];
 
-	ccfeq[1][1] = +d[1] +d[2] +d[7] +d[8] +d[9] +d[10] +d[11] +d[12] +d[13] +d[14];
-	ccfeq[1][2] = +d[7] -d[8] -d[11] +d[12];
-	ccfeq[1][3] = +d[9] -d[10] -d[13] +d[14];
-	ccfeq[2][1] = +d[7] -d[8] -d[11] +d[12];
-	ccfeq[2][2] = +d[3] +d[4] +d[7] +d[8] +d[11] +d[12] +d[15] +d[16] +d[17] +d[18];
-	ccfeq[2][3] = +d[15] -d[16] -d[17] +d[18];
-	ccfeq[3][1] = +d[9] -d[10] -d[13] +d[14];
-	ccfeq[3][2] = +d[15] -d[16] -d[17] +d[18];
-	ccfeq[3][3] = +d[5] +d[6] +d[9] +d[10] +d[13] +d[14] +d[15] +d[16] +d[17] +d[18];
+	scc[0][0] = ssum[1] +ssum[2] +ssum[7] +ssum[8] +ssum[9] +ssum[10] +ssum[11] +ssum[12] +ssum[13] +ssum[14];
+	scc[0][1] = ssum[7] -ssum[8] -ssum[11] +ssum[12];
+	scc[0][2] = ssum[9] -ssum[10] -ssum[13] +ssum[14];
+	scc[1][0] = scc[0][1];
+	scc[1][1] = ssum[3] +ssum[4] +ssum[7] +ssum[8] +ssum[11] +ssum[12] +ssum[15] +ssum[16] +ssum[17] +ssum[18];
+	scc[1][2] = ssum[15] -ssum[16] -ssum[17] +ssum[18];
+	scc[2][0] = scc[0][2];
+	scc[2][1] = scc[1][2];
+	scc[2][2] = ssum[5] +ssum[6] +ssum[9] +ssum[10] +ssum[13] +ssum[14] +ssum[15] +ssum[16] +ssum[17] +ssum[18];
+	
+	// -(uF + Fu) term  
+	scc[0][0] -= 2*u_x*g_x;
+	scc[0][1] -= (u_x*g_y + u_y*g_x);
+	scc[0][2] -= (u_x*g_z + u_z*g_x);
+	scc[1][0] -= (u_y*g_x + u_x*g_y);
+	scc[1][1] -= 2*u_y*g_y;
+	scc[1][2] -= (u_y*g_z + u_z*g_y);
+	scc[2][0] -= (u_z*g_x + u_x*g_z);
+	scc[2][1] -= (u_z*g_y + u_y*g_z);
+	scc[2][2] -= 2*u_z*g_z; 
 
-	//traceTerm = d[1] +d[2] +d[3] +d[4] +d[5] +d[6] +2.0f*d[7] +2.0f*d[8] +2.0f*d[9] +2.0f*d[10] +2.0f*d[11] +2.0f*d[12] +2.0f*d[13] +2.0f*d[14] +2.0f*d[15] +2.0f*d[16] +2.0f*d[17] +2.0f*d[18];
-	//ccfeq[1][1] -= traceTerm/3.0f;
-	//ccfeq[2][2] -= traceTerm/3.0f;
-	//ccfeq[3][3] -= traceTerm/3.0f;
+	float traceTerm = n[1] +n[2] +n[3] +n[4] +n[5] +n[6] +2.0f*n[7] +2.0f*n[8] +2.0f*n[9] +2.0f*n[10] +2.0f*n[11] +2.0f*n[12] +2.0f*n[13] +2.0f*n[14] +2.0f*n[15] +2.0f*n[16] +2.0f*n[17] +2.0f*n[18];
+	scc[1][1] -= traceTerm/3.0f;
+	scc[2][2] -= traceTerm/3.0f;
+	scc[3][3] -= traceTerm/3.0f;
 
-	// Shear rate tensor product
+	// Shear rate invariant
 	float srtII = 0.0;
 	for(int i = 0; i < 3; i++) {
 		for(int j = 0; j < 3; j++) {
-			//
-			srttII += ccfeq[i][j]*ccfeq[i][j];
+			srtII += scc[i][j]*scc[i][j];
 		}
 	}
+	// 2.1213203 comes from sqrt(2*1.5^2)
+	srtII = sqrt(srtII)*2.1213203/rho;
+	//printf("srtII = %f\n", srtII);
 
-	// Guo term correction?
+	// Tau redefinition for this time step
+	tau = compute_tau(srtII, &(flpDat->ViscosityParams[0]));
+	tau_p[i_1D] = tau;
 
-	// Second invariant, sqrt(2*1.5^2) = 2.1213203
-	srtII = sqrt(srtII)*2.1213203/(tau*rho)
+#endif // Tau computation
 
-	// Tau
-	float tau = compute_tau(&(flpDat->NonNewtonianParams[0]))
-
-#endif
-
-
+	// Recalcualate s
+	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
+	s[14] = 1.0f/tau; s[15] = 1.0f/tau;
+	
+	for(int i = 0; i < 19; i++) {
+		smn[i] = s[i]*mn[i]; // MRT relaxation
+		smg[i] = s[i]*mg[i]; // Relaxed part of guo term (non-relaxed part added later)
+	}
+	
+	// Convert back
+	msmn[0] = 5.2631579E-2f*smn[0] -1.2531328E-2f*smn[1] +4.7619048E-2f*smn[2];
+	msmn[1] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[3] -1.0E-1f*smn[4] +5.5555556E-2f*smn[9] -5.5555556E-2f*smn[10];
+	msmn[2] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] -1.0E-1f*smn[3] +1.0E-1f*smn[4] +5.5555556E-2f*smn[9] -5.5555556E-2f*smn[10];
+	msmn[3] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[5] -1.0E-1f*smn[6] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] +8.3333333E-2f*smn[11] -8.3333333E-2f*smn[12];
+	msmn[4] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] -1.0E-1f*smn[5] +1.0E-1f*smn[6] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] +8.3333333E-2f*smn[11] -8.3333333E-2f*smn[12];
+	msmn[5] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[7] -1.0E-1f*smn[8] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] -8.3333333E-2f*smn[11] +8.3333333E-2f*smn[12];
+	msmn[6] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] -1.0E-1f*smn[7] +1.0E-1f*smn[8] -2.7777778E-2f*smn[9] +2.7777778E-2f*smn[10] -8.3333333E-2f*smn[11] +8.3333333E-2f*smn[12];
+	msmn[7] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] +1.0E-1f*smn[5] +2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] +2.5E-1f*smn[13] +1.25E-1f*smn[16] -1.25E-1f*smn[17];
+	msmn[8] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] -2.5E-1f*smn[13] +1.25E-1f*smn[16] +1.25E-1f*smn[17];
+	msmn[9] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] +1.0E-1f*smn[7] +2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] +2.5E-1f*smn[15] -1.25E-1f*smn[16] +1.25E-1f*smn[18];
+	msmn[10] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[3] +2.5E-2f*smn[4] -1.0E-1f*smn[7] -2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] -2.5E-1f*smn[15] -1.25E-1f*smn[16] -1.25E-1f*smn[18];
+	msmn[11] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] +1.0E-1f*smn[5] +2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] -2.5E-1f*smn[13] -1.25E-1f*smn[16] -1.25E-1f*smn[17];
+	msmn[12] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] +8.3333333E-2f*smn[11] +4.1666667E-2f*smn[12] +2.5E-1f*smn[13] -1.25E-1f*smn[16] +1.25E-1f*smn[17];
+	msmn[13] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] +1.0E-1f*smn[7] +2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] -2.5E-1f*smn[15] +1.25E-1f*smn[16] +1.25E-1f*smn[18];
+	msmn[14] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[3] -2.5E-2f*smn[4] -1.0E-1f*smn[7] -2.5E-2f*smn[8] +2.7777778E-2f*smn[9] +1.3888889E-2f*smn[10] -8.3333333E-2f*smn[11] -4.1666667E-2f*smn[12] +2.5E-1f*smn[15] +1.25E-1f*smn[16] -1.25E-1f*smn[18];
+	msmn[15] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[5] +2.5E-2f*smn[6] +1.0E-1f*smn[7] +2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] +2.5E-1f*smn[14] +1.25E-1f*smn[17] -1.25E-1f*smn[18];
+	msmn[16] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[5] +2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] +1.25E-1f*smn[17] +1.25E-1f*smn[18];
+	msmn[17] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +1.0E-1f*smn[7] +2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] -1.25E-1f*smn[17] -1.25E-1f*smn[18];
+	msmn[18] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] +2.5E-1f*smn[14] -1.25E-1f*smn[17] +1.25E-1f*smn[18];
+	
+	
+	// Convert back
+	msmg[0] = 5.2631579E-2f*smg[0] -1.2531328E-2f*smg[1] +4.7619048E-2f*smg[2];
+	msmg[1] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[3] -1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
+	msmg[2] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[3] +1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
+	msmg[3] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[5] -1.0E-1f*smg[6] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] +8.3333333E-2f*smg[11] -8.3333333E-2f*smg[12];
+	msmg[4] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[5] +1.0E-1f*smg[6] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] +8.3333333E-2f*smg[11] -8.3333333E-2f*smg[12];
+	msmg[5] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[7] -1.0E-1f*smg[8] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] -8.3333333E-2f*smg[11] +8.3333333E-2f*smg[12];
+	msmg[6] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[7] +1.0E-1f*smg[8] -2.7777778E-2f*smg[9] +2.7777778E-2f*smg[10] -8.3333333E-2f*smg[11] +8.3333333E-2f*smg[12];
+	msmg[7] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] +1.0E-1f*smg[5] +2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] +2.5E-1f*smg[13] +1.25E-1f*smg[16] -1.25E-1f*smg[17];
+	msmg[8] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] -1.0E-1f*smg[5] -2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] -2.5E-1f*smg[13] +1.25E-1f*smg[16] +1.25E-1f*smg[17];
+	msmg[9] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] +1.0E-1f*smg[7] +2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] +2.5E-1f*smg[15] -1.25E-1f*smg[16] +1.25E-1f*smg[18];
+	msmg[10] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[3] +2.5E-2f*smg[4] -1.0E-1f*smg[7] -2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] -2.5E-1f*smg[15] -1.25E-1f*smg[16] -1.25E-1f*smg[18];
+	msmg[11] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] +1.0E-1f*smg[5] +2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] -2.5E-1f*smg[13] -1.25E-1f*smg[16] -1.25E-1f*smg[17];
+	msmg[12] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] -1.0E-1f*smg[5] -2.5E-2f*smg[6] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] +8.3333333E-2f*smg[11] +4.1666667E-2f*smg[12] +2.5E-1f*smg[13] -1.25E-1f*smg[16] +1.25E-1f*smg[17];
+	msmg[13] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] +1.0E-1f*smg[7] +2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] -2.5E-1f*smg[15] +1.25E-1f*smg[16] +1.25E-1f*smg[18];
+	msmg[14] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[3] -2.5E-2f*smg[4] -1.0E-1f*smg[7] -2.5E-2f*smg[8] +2.7777778E-2f*smg[9] +1.3888889E-2f*smg[10] -8.3333333E-2f*smg[11] -4.1666667E-2f*smg[12] +2.5E-1f*smg[15] +1.25E-1f*smg[16] -1.25E-1f*smg[18];
+	msmg[15] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[5] +2.5E-2f*smg[6] +1.0E-1f*smg[7] +2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] +2.5E-1f*smg[14] +1.25E-1f*smg[17] -1.25E-1f*smg[18];
+	msmg[16] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[5] +2.5E-2f*smg[6] -1.0E-1f*smg[7] -2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] -2.5E-1f*smg[14] +1.25E-1f*smg[17] +1.25E-1f*smg[18];
+	msmg[17] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[5] -2.5E-2f*smg[6] +1.0E-1f*smg[7] +2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] -2.5E-1f*smg[14] -1.25E-1f*smg[17] -1.25E-1f*smg[18];
+	msmg[18] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[5] -2.5E-2f*smg[6] -1.0E-1f*smg[7] -2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] +2.5E-1f*smg[14] -1.25E-1f*smg[17] +1.25E-1f*smg[18];
 
 	int streamIndex[19];
 	stream_locations(N_x, N_y, N_z, i_x, i_y, i_z, streamIndex);
 
 	// Propagate to f_s (not taking into account boundary conditions)
 	for (int i=0; i<19; i++) {
-		f_s[streamIndex[i]] = f[i] + c[i] + fg[i]; // fg contains non-relaxed part of full Guo term
+		f_s[streamIndex[i]] = f[i] + msmn[i] + fg[i] - 0.5f*msmg[i]; // fg contains non-relaxed part of full Guo term
+		//printf("i, f, msmn, fg, 0.5f*msmg; %d %f %f %f %f \n", i, f[i], msmn[i], fg[i], 0.5f*msmg[i]);
 	}
 }
 
@@ -427,6 +522,7 @@ __kernel void boundary_velocity(
 	__global flp_param_struct* flpDat,
 	int wallAxis) // Could try adding this argument to intDat
 {
+	
 	// Get 3D indices
 	int i_3[3]; // Needs to be an array
 	i_3[0] = get_global_id(0); // Using global_work_offset = {1,1,1}
@@ -520,16 +616,6 @@ __kernel void boundary_velocity(
 	f_s[ i_1D + tabUn[i_w][4]*N_C ] = f_k[12] + rho*(u_n - u_a2)/6.0f + N_a2;
 }
 
-__kernel void compute_viscosity_local(__global float* f_s,
-	__global int_param_struct* intDat,
-	__global int* streamMapping)
-{
-	// Use the local expression for the shear rate tensor in terms of non-equilibrium part of f
-
-	// Compute f_neq
-	float f_eq[19], f_new[19];
-
-}
 
 __kernel void collideSRT_newtonian_stream_D3Q19(
 	__global float* f_c,
@@ -703,11 +789,55 @@ void guo_body_force_term(float u_x, float u_y, float u_z,
 
 }
 
-// Casson
-void compute_tau(float* nonNewtonianParams)
+
+#ifdef CASSON
+float compute_tau(float srtII, __global float* nonNewtonianParams)
 {
 	float sigma_y = nonNewtonianParams[0];
 	float eta_inf = nonNewtonianParams[1];
+	float m_c = 1E6;
+	
+	//printf("sigma_y = %f\n", sigma_y);
+	//printf("eta_inf = %f\n", eta_inf);
+	
+	float a_c = (sqrt(eta_inf) + (1-exp(-sqrt(m_c*srtII)))*sqrt(sigma_y/srtII));
+	float tau = 3.0f*a_c*a_c + 0.5f;
+	
+	//float nu = (sqrt(sigma_y/srtII) + sqrt(eta_inf))*(sqrt(sigma_y/srtII) + sqrt(eta_inf));
+	//float tau = 3.0f*nu + 0.5f;
 
-
+	if (tau < MIN_TAU) {
+		tau = MIN_TAU;
+		printf("Warning: tau <= %f\n", tau);
+	}
+	//tau = tau > 100.0 ? 100.0 : tau;
+	//printf("Casson tau = %f\n", tau);
+	
+	return tau;
 }
+
+#elif POWER LAW
+float compute_tau(float srtII, __global float* nonNewtonianParams)
+{	
+	float k = 0.001;
+	//float n = 0.5;
+	
+	float nu = k/sqrt(srtII);
+	float tau = 3.0f*nu + 0.5f;
+	
+	//tau = tau > 100.0 ? 100.0 : tau;
+	if (tau < MIN_TAU) {
+		tau = MIN_TAU;
+		printf("Warning: tau <= %f\n", tau);
+	}
+	//printf("Power law tau = %f\n", tau);
+	
+	return tau;
+}
+
+#else
+float compute_tau(float srtII, __global float* nonNewtonianParams)
+{	
+	return 1.0;
+}
+#endif

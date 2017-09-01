@@ -12,6 +12,7 @@ typedef struct {
 	cl_int MaxSurfPointsPerNode;
 	cl_int InterpOrderIBM;
 	cl_int TotalSurfPoints;
+	cl_int RebuildFreq;
 
 } int_param_struct;
 
@@ -25,12 +26,16 @@ typedef struct {
 	cl_float VelLower[3];
 	// Viscosity
 	cl_float NewtonianTau;
-	cl_float NonNewtonianParams[4];
+	cl_float ViscosityParams[4];
 
 	// Particle
 	cl_float ParticleSize;
 
 } flp_param_struct;
+
+typedef struct {
+	cl_int numParInZone;
+} zone_struct;
 
 /*typedef struct {
 

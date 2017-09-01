@@ -25,17 +25,18 @@
 #define LB_Q 19
 
 #ifndef M_PI
-    #define M_PI 3.14159265358979323846
+	#define M_PI 3.14159265358979323846
 #endif
 
 // X-macros
 #define LIST_OF_KERNELS \
-    X(GPU_collideSRT_stream_D3Q19) \
-	X(GPU_boundary_velocity) \
-	X(GPU_boundary_periodic) \
-	X(CPU_sphere_collide)
+	X(collideSRT_stream_D3Q19) \
+	X(boundary_velocity) \
+	X(boundary_periodic) \
+	X(particle_dynamics)
 
 #include "struct_header_host.h"
+
 
 // Structs not used by kernel programs declared here
 typedef struct {
@@ -43,11 +44,13 @@ typedef struct {
 	int ConsolePrintFreq;
 	char InitialDist[WORD_STRING_SIZE];
 	float InitialVel[3];
-    int InitialParticleDistribution;
-    float InitialParticleBuffer;
-    int InterpOrderIBM;
+	int InitialParticleDistribution;
+	float InitialParticleBuffer;
+	int InterpOrderIBM;
+	int DomainDecomp[3];
 
 } host_param_struct;
+
 
 typedef struct {
 #define X(kernelName) cl_kernel kernelName;
@@ -75,12 +78,14 @@ int simulation_main(cl_device_id* devices, cl_command_queue* queueCPU, cl_comman
 void particle_dynamics(int_param_struct* intDat, cl_float4* parKinematics_h, cl_float4* parForces_h);
 
 int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams, host_param_struct* hostParams);
-int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat);
+int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_param_struct* hostDat);
 
 void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-    cl_float* f_h, cl_float* g_h, cl_float* u_h);
+	cl_float* f_h, cl_float* g_h, cl_float* gfp_h, cl_float* u_h, cl_float* tau_p_h);
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float4* parKinematics_h, cl_float4* parForces_h, cl_uint* pointIDs_h);
+void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
+	cl_float4* parKinematics, cl_float4* parForces, cl_uint* pointIDs);
 int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq);
 
 int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputDefaultSize);
