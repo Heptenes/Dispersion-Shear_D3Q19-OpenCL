@@ -19,91 +19,133 @@ void guo_body_force_term(float u_x, float u_y, float u_z,
 	float g_x, float g_y, float g_z, float* fGuo);
 float compute_tau(float srtII, __global float* params);
 
-__kernel void fluid_boundary_forces_linear_stencil(
+__kernel void particle_fluid_forces_linear_stencil(
+	__global int_param_struct* intDat,
 	__global float* gpf,
-	__global float4* parKinematics, // Move particle data to local in future!
-	__global float4* parForces,
-	__global uint* pointIDs,
-	__global uint* countPoints,
-	__global int_param_struct* intDat)
+	__global float* u,
+	__global float4* parKin,
+	__global float4* parFluidForce,
+	__global float4* parFluidForceSum,
+	__global float4* spherePoints,
+	__global uint* countPoints)
 {
-	int nID = get_global_id(0); // 1D kernel execution
-	int offset = 1; // 1 buffer layer
+	int globalID = get_global_id(0); // 1D kernel execution
+	int globalSize = get_global_size(0);
+	
+	int localID = get_local_id(0);
+	int localSize = get_local_size(0);
+	
+	int groupID = get_group_id(0);
+	int numGroups = get_num_groups(0);
+	
+	int np = intDat->NumParticles;
+	
+	// Get particle ID for this node
+	int PointsPerParticle = intDat->TotalSurfPoints/intDat->NumParticles;
+	int parID = globalID/PointsPerParticle; // Requires same number of nodes for each particle
+	int pointID = globalID%PointsPerParticle;
 
-	// Get lattice size info, for writing body force dat
+	// Get lattice size info, for reading and writing velocity and force
 	int N_x = intDat->LatticeSize[0];
 	int N_y = intDat->LatticeSize[1];
 	int N_z = intDat->LatticeSize[2];
 	int N_C = N_x*N_y*N_z; // Total nodes
 
-	// Get particle ID for this node
-	uint parNum = pointIDs[nID];
 	//uint pointNum = pointIDs[nID + intDat->TotalSurfPoints];
 
 	// Get particle kinetmatic data for this node
-	float4 xp, vp, e1, e2, e3, angVel;
+	float4 xp, vp, angVel;
 	for(int i = 0; i < 3; i++) {
-		xp = parKinematics[parNum]; // Position
-		vp = parKinematics[parNum + intDat->NumParticles]; // Velocity
-		e1 = parKinematics[parNum + 2*intDat->NumParticles]; //
-		e2 = parKinematics[parNum + 3*intDat->NumParticles];
-		e3 = parKinematics[parNum + 4*intDat->NumParticles];
-		angVel = parKinematics[parNum + 5*intDat->NumParticles];
+		xp = parKin[parID]; // Position
+		vp = parKin[parID + np]; // Velocity
+		angVel = parKin[parID + 3*np]; // Angular velocity
 	}
 
 	// Lookup original position of this point relative to particle center
-	float4 r;
-	float4 r2 = (float4){0.0, 0.0, 0.0, 0.0};
-
-	// Apply rotaiton
-	r2 = e1*r.x + e2*r.y + e3*r.z;
+	float4 r0 = spherePoints[pointID];
+	
+	// Apply rotation (shouldn't be needed for spherical particles)
+	//float4 r2 = (float4){0.0, 0.0, 0.0, 0.0};
+	//r2 = e1*r.x + e2*r.y + e3*r.z;
 
 	// Absolute position of point
-	float4 rp = xp + r2;
+	float4 r_p = xp + r0;
 
-	// Adjust for pbc
-	float4 w = (float4)(N_x-3, N_y-3, N_z-3, 0);
-	float4 rpp = fmod(rp,w);
+	// Adjust for periodic BCs
+	float4 w = (float4)(N_x-3.0f, N_y-3.0f, N_z-3.0f, 0.0f); // lattice buffer = 1
+	float4 r_pp = fmod(r_p,w);
 
-	// Location of corner closest to origin
-	int i_xf = floor(rpp.x) + offset;
-	int i_yf = floor(rpp.y) + offset;
-	int i_zf = floor(rpp.z) + offset;
+	// Location of corner closest to origin (cast as float because used as coordinate)
+	int x_0 = floor(r_pp.x) + intDat->BufferSize[0];
+	int y_0 = floor(r_pp.y) + intDat->BufferSize[1];
+	int z_0 = floor(r_pp.z) + intDat->BufferSize[2];
 	
-	// Stencil weightings
+	// Linear stencil interpolation weightings
 	int sten[8][3] = {{0,0,0}, {0,0,1}, {0,1,0}, {0,1,1}, {1,0,0}, {1,0,1}, {1,1,0}, {1,1,1}};
-	float wn[8];
+	float weights[8];
+	float4 u_pp = (float4){0.0, 0.0, 0.0, 0.0};
 	
 	for(int n = 0; n < 8; n++) {
-		wn[n] = 0.0;
+		//
+		int x_n = x_0 + sten[n][0];
+		int y_n = y_0 + sten[n][1];
+		int z_n = z_0 + sten[n][2];
+		int i_1D = x_n + N_x*(y_n + N_y*z_n);
+		
+		float wx = 1.0f - fabs(r_pp.x-(float)x_n);
+		float wy = 1.0f - fabs(r_pp.y-(float)y_n);
+		float wz = 1.0f - fabs(r_pp.z-(float)z_n);
+		
+		weights[n] = wx*wy*wz;
+		
+		// Interpolate velocity
+		u_pp.x += u[i_1D        ];
+		u_pp.y += u[i_1D +   N_C];
+		u_pp.z += u[i_1D + 2*N_C];
 	}
-	
-	// Interpolate velocity
-	float4 u;
 
 	// Calculate velocity of node
-	float4 v = vp + cross(angVel,r); // Order is important
-
+	float4 v_pp = vp + cross(angVel,r_pp); // Order is important
 
 	// Direct forcing velocity delta
-	float4 ud = v - u;
+	float fCoeff = 1.0f;
+	float4 vuForce = v_pp - u_pp; // Proportional to force on fluid
+	float4 vuTorque = cross(r0,vuForce);
 
 	// Distribute force to 8 nodes
-
-	
 	for(int n = 0; n < 8; n++) {
-
-		int dx = sten[n][0];
-		int dy = sten[n][1];
-		int dz = sten[n][2];
-		int i_n = (i_xf+dx) + N_x*((i_yf+dy) + N_y*(i_zf+dz));
+		//
+		int x_n = x_0 + sten[n][0];
+		int y_n = y_0 + sten[n][1];
+		int z_n = z_0 + sten[n][2];
+		int i_1D = x_n + N_x*(y_n + N_y*z_n);
 		
-		int p = atomic_inc(&countPoints[i_n]); // The p'th time a surface point writes to this node
-		gpf[i_n + N_C*(3*p)    ] += ud.x;
-		gpf[i_n + N_C*(3*p + 1)] += ud.y;
-		gpf[i_n + N_C*(3*p + 2)] += ud.z;
+		int pTemp = atomic_inc(&countPoints[i_1D]); // The p'th time a surface point writes to this node
+		int p = pTemp%intDat->MaxSurfPointsPerNode;
+		gpf[i_1D + N_C*(3*p)	] += weights[n]*vuForce.x;
+		gpf[i_1D + N_C*(3*p + 1)] += weights[n]*vuForce.y;
+		gpf[i_1D + N_C*(3*p + 2)] += weights[n]*vuForce.z;
+	}
+	
+	parFluidForceSum[globalID] = vuForce;
+	parFluidForceSum[globalID + globalSize] = vuTorque;
+	
+	// Sum force and torque over all the threads in this work group
+	barrier(CLK_LOCAL_MEM_FENCE);
+
+	// Work group size must be power of 2
+	for(int i_s = localSize/2; i_s>0; i_s >>= 1) {
+		if(localID < i_s) {
+			parFluidForceSum[globalID] += parFluidForceSum[globalID + i_s]; // Force 
+			parFluidForceSum[globalID + globalSize] += parFluidForceSum[globalID + i_s + globalSize]; // Torque
+		}
+		barrier(CLK_LOCAL_MEM_FENCE);
 	}
 
+	if(localID == 0) {
+		parFluidForce[groupID] = parFluidForceSum[globalID]; // Return summed force 
+		parFluidForce[groupID + numGroups] = parFluidForceSum[globalID + globalSize]; // Summed torque
+	}
 }
 
 
@@ -138,7 +180,7 @@ __kernel void collideMRT_stream_D3Q19(
 	// Read f_c from __global to private memory (should be coalesced memory access)
 	float rho = 0.0f;
 	for (int i = 0; i < 19; i++) {
-		f[i] = f_c[ i_1D + i*N_C ];
+		f[i] = f_c[i_1D + i*N_C];
 		rho += f[i];
 	}
 
@@ -153,23 +195,25 @@ __kernel void collideMRT_stream_D3Q19(
 
 	// Try partial sum instead
 	for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
-		g_x += gfp[i_1D + NC*(3*p)    ];
+		g_x += gfp[i_1D + NC*(3*p)	  ];
 		g_y += gfp[i_1D + NC*(3*p + 1)];
 		g_z += gfp[i_1D + NC*(3*p + 2)];
 	}
+	
+	countPoints[i_1D] = 0;
 
 #endif
 
-	// Compute velocity	(J. Stat. Mech. (2010) P01018 convention)
+	// Compute velocity (J. Stat. Mech. (2010) P01018 convention)
 	// w/ body force contribution (Guo et al. 2002)
 	float u_x = (f[1]-f[2]+f[7]+f[8] +f[9] +f[10]-f[11]-f[12]-f[13]-f[14] + 0.5f*g_x)/rho;
 	float u_y = (f[3]-f[4]+f[7]-f[8] +f[11]-f[12]+f[15]+f[16]-f[17]-f[18] + 0.5f*g_y)/rho;
 	float u_z = (f[5]-f[6]+f[9]-f[10]+f[13]-f[14]+f[15]-f[16]+f[17]-f[18] + 0.5f*g_z)/rho;
 
 	// Write to __global *u
-	u[ i_1D         ] = u_x;
-	u[ i_1D +   N_C ] = u_y;
-	u[ i_1D + 2*N_C ] = u_z;
+	u[i_1D		  ] = u_x;
+	u[i_1D +   N_C] = u_y;
+	u[i_1D + 2*N_C] = u_z;
 
 	// Multiple relaxtion time (BGK) collision
 	float f_eq[19], n[19], mn[19], smn[19], msmn[19], mg[19], smg[19], msmg[19]; // Could reduce memory requirement
@@ -310,7 +354,7 @@ __kernel void collideMRT_stream_D3Q19(
 	scc[2][1] = scc[1][2];
 	scc[2][2] = ssum[5] +ssum[6] +ssum[9] +ssum[10] +ssum[13] +ssum[14] +ssum[15] +ssum[16] +ssum[17] +ssum[18];
 	
-	// -(uF + Fu) term  
+	// -(uF + Fu) term	
 	scc[0][0] -= 2*u_x*g_x;
 	scc[0][1] -= (u_x*g_y + u_y*g_x);
 	scc[0][2] -= (u_x*g_z + u_z*g_x);
@@ -321,10 +365,10 @@ __kernel void collideMRT_stream_D3Q19(
 	scc[2][1] -= (u_z*g_y + u_y*g_z);
 	scc[2][2] -= 2*u_z*g_z; 
 
-	float traceTerm = n[1] +n[2] +n[3] +n[4] +n[5] +n[6] +2.0f*n[7] +2.0f*n[8] +2.0f*n[9] +2.0f*n[10] +2.0f*n[11] +2.0f*n[12] +2.0f*n[13] +2.0f*n[14] +2.0f*n[15] +2.0f*n[16] +2.0f*n[17] +2.0f*n[18];
-	scc[1][1] -= traceTerm/3.0f;
-	scc[2][2] -= traceTerm/3.0f;
-	scc[3][3] -= traceTerm/3.0f;
+	//float traceTerm = n[1] +n[2] +n[3] +n[4] +n[5] +n[6] +2.0f*n[7] +2.0f*n[8] +2.0f*n[9] +2.0f*n[10] +2.0f*n[11] +2.0f*n[12] +2.0f*n[13] +2.0f*n[14] +2.0f*n[15] +2.0f*n[16] +2.0f*n[17] +2.0f*n[18];
+	//scc[0][0] -= traceTerm/3.0f;
+	//scc[1][1] -= traceTerm/3.0f;
+	//scc[2][2] -= traceTerm/3.0f;
 
 	// Shear rate invariant
 	float srtII = 0.0;
@@ -373,8 +417,6 @@ __kernel void collideMRT_stream_D3Q19(
 	msmn[17] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +1.0E-1f*smn[7] +2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] -1.25E-1f*smn[17] -1.25E-1f*smn[18];
 	msmn[18] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] +2.5E-1f*smn[14] -1.25E-1f*smn[17] +1.25E-1f*smn[18];
 	
-	
-	// Convert back
 	msmg[0] = 5.2631579E-2f*smg[0] -1.2531328E-2f*smg[1] +4.7619048E-2f*smg[2];
 	msmg[1] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[3] -1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
 	msmg[2] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[3] +1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
@@ -529,7 +571,7 @@ __kernel void boundary_velocity(
 	i_3[1] = get_global_id(1);
 	i_3[2] = get_global_id(2);
 	int i_lu = get_global_id(wallAxis)-1; //  0 or 1 for lower or upper wall
-	int i_lu_pm = i_lu*2 - 1;             // -1 or 1 for lower or upper wall
+	int i_lu_pm = i_lu*2 - 1;			  // -1 or 1 for lower or upper wall
 
 	int N[3];
 	N[0] = intDat->LatticeSize[0];
@@ -552,7 +594,7 @@ __kernel void boundary_velocity(
 		{3, 7,11,15,16}, // y- wall
 		{4, 8,12,17,18}, // y+ wall
 		{5, 9,13,15,17}, // z- wall
-		{6,10,14,16,18}  // z+ wall
+		{6,10,14,16,18}	 // z+ wall
 	};
 
 	int tabKn[6][14] = {
@@ -577,7 +619,7 @@ __kernel void boundary_velocity(
 	// Read in 14 knowns
 	float f_k[14];
 	for (int i_k=0; i_k<14; i_k++) {
-		f_k[i_k] = f_s[ i_1D + tabKn[i_w][i_k]*N_C ];
+		f_k[i_k] = f_s[i_1D + tabKn[i_w][i_k]*N_C ];
 	}
 
 	// Read in velocities
@@ -590,7 +632,7 @@ __kernel void boundary_velocity(
 	u_w[5] = flpDat->VelUpper[2];
 
 	float u[3]; // Velocity for this node
-	u[0] = u_w[i_lu*3    ];
+	u[0] = u_w[i_lu*3	 ];
 	u[1] = u_w[i_lu*3 + 1];
 	u[2] = u_w[i_lu*3 + 2];
 
@@ -607,13 +649,13 @@ __kernel void boundary_velocity(
 	float N_a2 = 0.5f*(f_k[3]+f_k[5]+f_k[7] -f_k[4]-f_k[6]-f_k[8]) - rho*u_a2/3.0f;
 
 	// Calculate unknown normal to wall, write to f_s for this node
-	f_s[ i_1D + tabUn[i_w][0]*N_C ] = f_k[9] + rho*u_n/3.0f;
+	f_s[i_1D + tabUn[i_w][0]*N_C] = f_k[9] + rho*u_n/3.0f;
 
 	// Other four unknowns
-	f_s[ i_1D + tabUn[i_w][1]*N_C ] = f_k[11] + rho*(u_n + u_a1)/6.0f - N_a1;
-	f_s[ i_1D + tabUn[i_w][2]*N_C ] = f_k[10] + rho*(u_n - u_a1)/6.0f + N_a1;
-	f_s[ i_1D + tabUn[i_w][3]*N_C ] = f_k[13] + rho*(u_n + u_a2)/6.0f - N_a2;
-	f_s[ i_1D + tabUn[i_w][4]*N_C ] = f_k[12] + rho*(u_n - u_a2)/6.0f + N_a2;
+	f_s[i_1D + tabUn[i_w][1]*N_C] = f_k[11] + rho*(u_n + u_a1)/6.0f - N_a1;
+	f_s[i_1D + tabUn[i_w][2]*N_C] = f_k[10] + rho*(u_n - u_a1)/6.0f + N_a1;
+	f_s[i_1D + tabUn[i_w][3]*N_C] = f_k[13] + rho*(u_n + u_a2)/6.0f - N_a2;
+	f_s[i_1D + tabUn[i_w][4]*N_C] = f_k[12] + rho*(u_n - u_a2)/6.0f + N_a2;
 }
 
 
@@ -645,7 +687,7 @@ __kernel void collideSRT_newtonian_stream_D3Q19(
 	// Read f_c from __global to private memory (should be coalesced memory access)
 	float rho = 0.0f;
 	for (int i=0; i<19; i++) {
-		f[i] = f_c[ i_1D + i*N_C ];
+		f[i] = f_c[i_1D + i*N_C ];
 		rho += f[i];
 	}
 
@@ -654,21 +696,21 @@ __kernel void collideSRT_newtonian_stream_D3Q19(
 	float g_y = flpDat->ConstBodyForce[1];
 	float g_z = flpDat->ConstBodyForce[2];
 #else
-	float g_x = g[ i_1D         ];
-	float g_y = g[ i_1D +   N_C ];
-	float g_z = g[ i_1D + 2*N_C ];
+	float g_x = g[i_1D		  ];
+	float g_y = g[i_1D +   N_C];
+	float g_z = g[i_1D + 2*N_C];
 #endif
 
-	// Compute velocity	(J. Stat. Mech. (2010) P01018 convention)
+	// Compute velocity (J. Stat. Mech. (2010) P01018 convention)
 	// w/ body force contribution (Guo et al. 2002)
 	float u_x = (f[1]-f[2]+f[7]+f[8] +f[9] +f[10]-f[11]-f[12]-f[13]-f[14] + 0.5f*g_x)/rho;
 	float u_y = (f[3]-f[4]+f[7]-f[8] +f[11]-f[12]+f[15]+f[16]-f[17]-f[18] + 0.5f*g_y)/rho;
 	float u_z = (f[5]-f[6]+f[9]-f[10]+f[13]-f[14]+f[15]-f[16]+f[17]-f[18] + 0.5f*g_z)/rho;
 
 	// Write to __global *u
-	u[ i_1D         ] = u_x;
-	u[ i_1D +   N_C ] = u_y;
-	u[ i_1D + 2*N_C ] = u_z;
+	u[i_1D		  ] = u_x;
+	u[i_1D +   N_C] = u_y;
+	u[i_1D + 2*N_C] = u_z;
 
 	// Single relaxtion time (BGK) collision
 	float f_eq[19];
@@ -706,25 +748,25 @@ void stream_locations(int N_x, int N_y, int N_z, int i_x, int i_y, int i_z, int*
 	int N_xy = N_x*N_y;
 	int N_C = N_xy*N_z;
 
-	index[0]  =          i_1D;
-	index[1]  =    N_C + i_1D + 1;
-	index[2]  =  2*N_C + i_1D - 1;
-	index[3]  =  3*N_C + i_1D     + N_x;
-	index[4]  =  4*N_C + i_1D     - N_x;
-	index[5]  =  5*N_C + i_1D           + N_xy;
-	index[6]  =  6*N_C + i_1D           - N_xy;
-	index[7]  =  7*N_C + i_1D + 1 + N_x;
-	index[8]  =  8*N_C + i_1D + 1 - N_x;
-	index[9]  =  9*N_C + i_1D + 1       + N_xy;
-	index[10] = 10*N_C + i_1D + 1       - N_xy;
+	index[0]  =			 i_1D;
+	index[1]  =	   N_C + i_1D + 1;
+	index[2]  =	 2*N_C + i_1D - 1;
+	index[3]  =	 3*N_C + i_1D	  + N_x;
+	index[4]  =	 4*N_C + i_1D	  - N_x;
+	index[5]  =	 5*N_C + i_1D			+ N_xy;
+	index[6]  =	 6*N_C + i_1D			- N_xy;
+	index[7]  =	 7*N_C + i_1D + 1 + N_x;
+	index[8]  =	 8*N_C + i_1D + 1 - N_x;
+	index[9]  =	 9*N_C + i_1D + 1		+ N_xy;
+	index[10] = 10*N_C + i_1D + 1		- N_xy;
 	index[11] = 11*N_C + i_1D - 1 + N_x;
 	index[12] = 12*N_C + i_1D - 1 - N_x;
-	index[13] = 13*N_C + i_1D - 1       + N_xy;
-	index[14] = 14*N_C + i_1D - 1       - N_xy;
-	index[15] = 15*N_C + i_1D     + N_x + N_xy;
-	index[16] = 16*N_C + i_1D     + N_x - N_xy;
-	index[17] = 17*N_C + i_1D     - N_x + N_xy;
-	index[18] = 18*N_C + i_1D     - N_x - N_xy;
+	index[13] = 13*N_C + i_1D - 1		+ N_xy;
+	index[14] = 14*N_C + i_1D - 1		- N_xy;
+	index[15] = 15*N_C + i_1D	  + N_x + N_xy;
+	index[16] = 16*N_C + i_1D	  + N_x - N_xy;
+	index[17] = 17*N_C + i_1D	  - N_x + N_xy;
+	index[18] = 18*N_C + i_1D	  - N_x - N_xy;
 }
 
 void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y, float u_z)
@@ -734,16 +776,16 @@ void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y
 	f_eq[0] = (rho/3.0f)*(1.0f - 1.5f*u_sq);
 
 	// could remove factor of 1.5
-	f_eq[1]  = (rho/18.0f)*(1.0f + 3.0f*u_x + 4.5f*u_x*u_x - 1.5f*u_sq);
-	f_eq[2]  = (rho/18.0f)*(1.0f - 3.0f*u_x + 4.5f*u_x*u_x - 1.5f*u_sq);
-	f_eq[3]  = (rho/18.0f)*(1.0f + 3.0f*u_y + 4.5f*u_y*u_y - 1.5f*u_sq);
-	f_eq[4]  = (rho/18.0f)*(1.0f - 3.0f*u_y + 4.5f*u_y*u_y - 1.5f*u_sq);
-	f_eq[5]  = (rho/18.0f)*(1.0f + 3.0f*u_z + 4.5f*u_z*u_z - 1.5f*u_sq);
-	f_eq[6]  = (rho/18.0f)*(1.0f - 3.0f*u_z + 4.5f*u_z*u_z - 1.5f*u_sq);
+	f_eq[1]	 = (rho/18.0f)*(1.0f + 3.0f*u_x + 4.5f*u_x*u_x - 1.5f*u_sq);
+	f_eq[2]	 = (rho/18.0f)*(1.0f - 3.0f*u_x + 4.5f*u_x*u_x - 1.5f*u_sq);
+	f_eq[3]	 = (rho/18.0f)*(1.0f + 3.0f*u_y + 4.5f*u_y*u_y - 1.5f*u_sq);
+	f_eq[4]	 = (rho/18.0f)*(1.0f - 3.0f*u_y + 4.5f*u_y*u_y - 1.5f*u_sq);
+	f_eq[5]	 = (rho/18.0f)*(1.0f + 3.0f*u_z + 4.5f*u_z*u_z - 1.5f*u_sq);
+	f_eq[6]	 = (rho/18.0f)*(1.0f - 3.0f*u_z + 4.5f*u_z*u_z - 1.5f*u_sq);
 
-	f_eq[7]  = (rho/36.0f)*(1.0f + 3.0f*(u_x+u_y) + 4.5f*(u_x+u_y)*(u_x+u_y) - 1.5f*u_sq);
-	f_eq[8]  = (rho/36.0f)*(1.0f + 3.0f*(u_x-u_y) + 4.5f*(u_x-u_y)*(u_x-u_y) - 1.5f*u_sq);
-	f_eq[9]  = (rho/36.0f)*(1.0f + 3.0f*(u_x+u_z) + 4.5f*(u_x+u_z)*(u_x+u_z) - 1.5f*u_sq);
+	f_eq[7]	 = (rho/36.0f)*(1.0f + 3.0f*(u_x+u_y) + 4.5f*(u_x+u_y)*(u_x+u_y) - 1.5f*u_sq);
+	f_eq[8]	 = (rho/36.0f)*(1.0f + 3.0f*(u_x-u_y) + 4.5f*(u_x-u_y)*(u_x-u_y) - 1.5f*u_sq);
+	f_eq[9]	 = (rho/36.0f)*(1.0f + 3.0f*(u_x+u_z) + 4.5f*(u_x+u_z)*(u_x+u_z) - 1.5f*u_sq);
 	f_eq[10] = (rho/36.0f)*(1.0f + 3.0f*(u_x-u_z) + 4.5f*(u_x-u_z)*(u_x-u_z) - 1.5f*u_sq);
 
 	f_eq[11] = (rho/36.0f)*(1.0f + 3.0f*(-u_x+u_y) + 4.5f*(-u_x+u_y)*(-u_x+u_y) - 1.5f*u_sq);

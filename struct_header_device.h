@@ -1,17 +1,30 @@
+#define PAR_COL_HARMONIC 1
+#define PAR_COL_LJ 2
+
 typedef struct {
 
-	int BasisVel[19][3];
 	int MaxIterations;
+	
+	int BasisVel[19][3];
 	int LatticeSize[3];
 	int BufferSize[3];
 	int BoundaryConds[3];
+	int NumZones[3];
+	
 	int MaintainShear;
 	int ViscosityModel;
 
 	int NumParticles;
+	int ParForceModel;
+	
 	int MaxSurfPointsPerNode;
 	int InterpOrderIBM;
+	
+	int PointsPerParticle;
+	int PointsPerWorkGroup;
 	int TotalSurfPoints;
+	int NumForceArrays;
+	
 	int RebuildFreq;
 
 } int_param_struct;
@@ -27,14 +40,20 @@ typedef struct {
 	// Viscosity
 	float NewtonianTau;
 	float ViscosityParams[4];
+	
+	float ZoneWidth[3];
 
 	// Particle
-	float ParticleSize;
+	float ParticleDiam;
+	float ParticleMass;
+	float ParticleMomInertia;
+	float ParForceParams[2];
 
 } flp_param_struct;
 
 typedef struct {
-	int numParInZone;
+	int NumNeighbors;
+	int NeighborZones[26];
 } zone_struct;
 
 /*typedef struct {

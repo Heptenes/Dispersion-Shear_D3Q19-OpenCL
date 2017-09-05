@@ -1,260 +1,6 @@
 #include "D3Q19-OpenCL_header.h"
 
-int main(int argc, char *argv[])
-{
-	cl_device_id devices[2]; // One CPU, one GPU
-	analyse_platform(devices);
-
-	// Create context and queues
-	cl_int error;
-	cl_context context;
-	context = clCreateContext(NULL, 2, devices, NULL, NULL, &error);
-	error_check(error, "clCreateContext", 1);
-
-	// Create a command queue for CPU and GPU
-	cl_command_queue queueCPU, queueGPU;
-
-	queueCPU = clCreateCommandQueue(context, devices[0], 0, &error);
-	error_check(error, "clCreateCommandQueue", 1);
-
-	queueGPU = clCreateCommandQueue(context, devices[1], 0, &error);
-	error_check(error, "clCreateCommandQueue", 1);
-
-	// Test devices
-	vecadd_test(10, &devices[0], &queueCPU, &context);
-	vecadd_test(10, &devices[1], &queueGPU, &context);
-
-	// Run LB calculation
-	int returnLB = simulation_main(devices, &queueCPU, &queueGPU, &context);
-
-	// Clean-up
-	clReleaseCommandQueue(queueCPU);
-	clReleaseCommandQueue(queueGPU);
-	clReleaseContext(context);
-
-	return 0;
-}
-
-int simulation_main(cl_device_id* devices, cl_command_queue* CPU_QueuePtr, cl_command_queue* GPU_QueuePtr,
-	cl_context* contextPtr)
-{
-	// Initialise parameter structs
-	int_param_struct intDat;
-	flp_param_struct flpDat;
-	host_param_struct hostDat; // Params which remain in host memory
-	kernel_struct kernelDat;
-
-	printf("Int struct size: %lu\n", sizeof(intDat));
-	printf("Flp struct size: %lu\n", sizeof(flpDat));
-
-	// Assign data arrays, read input
-	initialize_data(&intDat, &flpDat, &hostDat);
-	int paramErrors = parameter_checking(&intDat, &flpDat, &hostDat);
-	if (paramErrors > 0) {
-		exit(EXIT_FAILURE);
-	}
-	
-	// Read sphere surface discretization points
-	cl_float4* sphereNodesXYZ;
-	sphere_discretization(&intDat, &flpDat, sphereNodesXYZ);
-	
-	int NumNodes = intDat.LatticeSize[0]*intDat.LatticeSize[1]*intDat.LatticeSize[2];
-
-	// Create arrays on host
-	size_t fDataSize = NumNodes*LB_Q*sizeof(cl_float);
-	size_t a3DataSize = NumNodes*3*sizeof(cl_float);
-	size_t parA3DataSize = intDat.NumParticles*3*sizeof(cl_float); // Array implementation
-	size_t parV4DataSize = intDat.NumParticles*sizeof(cl_float4);  // Vector type implementation
-
-
-	// --- HOST ARRAYS ---------------------------------------------------------
-	cl_float* f_h = (cl_float*)malloc(fDataSize);
-	cl_float* u_h = (cl_float*)malloc(a3DataSize);
-	cl_float* g_h = (cl_float*)malloc(a3DataSize);
-	cl_float* gpf_h = (cl_float*)malloc(a3DataSize*intDat.MaxSurfPointsPerNode);
-	cl_uint* countPoint_h = (cl_uint*)malloc(NumNodes*sizeof(cl_uint));
-	cl_float* tau_p_h = (cl_float*)malloc(NumNodes*sizeof(cl_float));
-
-	cl_float4* parKinematics = (cl_float4*)malloc(parV4DataSize*6); // x, vel, rot, ang vel
-	cl_float4* parForces = (cl_float4*)malloc(parV4DataSize*2); // Force and torque
-	// Particle num node belongs to, index within particle
-	cl_uint* pointIDs = (cl_uint*)malloc(intDat.TotalSurfPoints*sizeof(cl_uint)*2);
-
-	// Initialization
-	initialize_lattice_fields(&hostDat, &intDat, &flpDat, f_h, g_h, gpf_h, u_h, tau_p_h);
-	initialize_particle_zones(&hostDat, &intDat, &flpDat, parKinematics, parForces, pointIDs);
-	initialize_particle_fields(&hostDat, &intDat, &flpDat, parKinematics, parForces, pointIDs);
-
-	// Stream mapping for pbcs
-	cl_int* strMap;
-	cl_int numPeriodicNodes = create_periodic_stream_mapping(&intDat, &strMap);
-	printf("Periodic boundary nodes %d\n", numPeriodicNodes);
-	size_t smDataSize = numPeriodicNodes*2*sizeof(cl_int);
-
-	// Build LB kernels
-	create_LB_kernels(contextPtr, devices, &kernelDat);
-
-	// --- CREATE AND WRITE BUFFERS ---------------------------------------------
-	cl_mem fA_cl, fB_cl, u_cl, g_cl, gpf_cl, countPoint_cl, tau_p_cl; // Lattice arrays
-	fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
-	fB_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
-	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, NULL);
-	g_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, NULL);
-	gpf_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, NULL);
-	countPoint_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, NumNodes*sizeof(cl_uint), NULL, NULL);
-	if (intDat.ViscosityModel != 0) {
-		tau_p_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, NumNodes*sizeof(cl_float), NULL, NULL);
-	}
-
-	cl_mem parKinematics_cl, parForces_cl; // Particle arrays
-	parKinematics_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, parV4DataSize*6, NULL, NULL);
-	parForces_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*2, parForces, NULL);
-
-	// Read-only buffers
-	cl_mem intDat_cl, flpDat_cl, strMap_cl;
-	intDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(int_param_struct), NULL, NULL);
-	flpDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(flp_param_struct), NULL, NULL);
-
-	strMap_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, smDataSize, NULL, NULL);
-
-	cl_mem pointIDs_cl; // Particle surface point arrays
-	pointIDs_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, 2*intDat.TotalSurfPoints*sizeof(cl_uint), NULL, NULL);
-
-	// Write to device
-	cl_int error_h = CL_SUCCESS;
-	error_h = clEnqueueWriteBuffer(*GPU_QueuePtr, fA_cl, CL_TRUE, 0, fDataSize, f_h, 0, NULL, NULL);
-	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, fB_cl, CL_TRUE, 0, fDataSize, f_h, 0, NULL, NULL);
-	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
-	//error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, g_cl, CL_TRUE, 0, a3DataSize, g_h, 0, NULL, NULL);
-	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, gpf_cl, CL_TRUE, 0, a3DataSize*intDat.MaxSurfPointsPerNode, gpf_h, 0, NULL, NULL);
-	if (intDat.ViscosityModel != 0) {
-		error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, tau_p_cl, CL_TRUE, 0, NumNodes*sizeof(cl_float), tau_p_h, 0, NULL, NULL);
-	}
-
-	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, strMap_cl, CL_TRUE, 0, smDataSize, strMap, 0, NULL, NULL);
-	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, intDat_cl, CL_TRUE, 0, sizeof(intDat), &intDat, 0, NULL, NULL);
-	error_h |= clEnqueueWriteBuffer(*GPU_QueuePtr, flpDat_cl, CL_TRUE, 0, sizeof(flpDat), &flpDat, 0, NULL, NULL);
-	error_check(error_h, "clEnqueueWriteBuffer", 1);
-
-	// --- KERNEL RANGE SETTINGS -----------------------------------------------
-	// Offset global id by 1, because of buffer layer
-	size_t global_work_offset[3] = {1, 1, 1}; // Perf test this
-	size_t global_work_size[3];
-	size_t velBC_work_size[3];
-	cl_int wallAxis=0;
-
-	// Work sizes
-	int velBoundary=0;
-	for (int dim=0; dim<3; dim++) {
-		global_work_size[dim] = intDat.LatticeSize[dim] - 2;
-
-		if (intDat.BoundaryConds[dim] == 1) {
-			velBC_work_size[dim] = 2; // This is the velocity boundary pair
-			wallAxis = dim;
-			velBoundary = 1;
-		}
-		else {
-			velBC_work_size[dim] = intDat.LatticeSize[dim] - 2;
-		}
-	}
-	if (velBoundary) {
-		char xyz[4] = "XYZ\0";
-		printf("%s %c\n", "Velocity BC applied to walls normal to axis", xyz[wallAxis]);
-	}
-
-	size_t periodic_work_size = numPeriodicNodes;
-
-	// --- FIXED KERNEL ARGS ---------------------------------------------------
-	size_t memSize = sizeof(cl_mem);
-	error_h = CL_SUCCESS;
-	error_h |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 2, memSize, &gpf_cl);
-	error_h |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 3, memSize, &u_cl);
-	error_h |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 4, memSize, &tau_p_cl);
-	error_h |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 5, memSize, &intDat_cl);
-	error_h |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 6, memSize, &flpDat_cl);
-
-	error_h |= clSetKernelArg(kernelDat.boundary_velocity, 1, memSize, &intDat_cl);
-	error_h |= clSetKernelArg(kernelDat.boundary_velocity, 2, memSize, &flpDat_cl);
-	error_h |= clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &wallAxis);
-
-	error_h |= clSetKernelArg(kernelDat.boundary_periodic, 1, memSize, &intDat_cl);
-	error_h |= clSetKernelArg(kernelDat.boundary_periodic, 2, memSize, &strMap_cl);
-	error_check(error_h, "clSetKernelArg", 1);
-
-	// ---------------------------------------------------------------------------------
-	// --- MAIN LOOP -------------------------------------------------------------------
-	// ---------------------------------------------------------------------------------
-	printf("%s %d\n", "Starting iteration 1, maximum iterations", intDat.MaxIterations);
-	for (int t=1; t<=intDat.MaxIterations; t++) {
-
-		int toPrint = (t%hostDat.ConsolePrintFreq == 0) ? 1 : 0;
-
-		if (toPrint) {
-			printf("%s %d\n", "Starting iteration", t);
-		}
-
-		// Switch f buffers
-		if (t%2 == 0) {
-			error_h	 = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fA_cl);
-			error_h |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 1, memSize, &fB_cl);
-			error_h |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fB_cl);
-			error_h |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fB_cl);
-			//error_check(error_h, "clSetKernelArg", 1);
-		}
-		else {
-			error_h	 = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fB_cl);
-			error_h |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 1, memSize, &fA_cl);
-			error_h |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fA_cl);
-			error_h |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fA_cl);
-			//error_check(error_h, "clSetKernelArg", 1);
-		}
-
-		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collideSRT_stream_D3Q19, 3,
-			global_work_offset, global_work_size, NULL, 0, NULL, NULL);
-
-		clFinish(*GPU_QueuePtr);
-
-		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_periodic, 1,
-			NULL, &periodic_work_size, NULL, 0, NULL, NULL);
-
-		clFinish(*GPU_QueuePtr);
-
-		if (velBoundary) {
-			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_velocity, 3,
-				global_work_offset, velBC_work_size, NULL, 0, NULL, NULL);
-
-			clFinish(*GPU_QueuePtr);
-		}
-
-		// Exchange particle forces
-
-
-		// Update boundary conditions
-		
-		
-		// Clear particle zones
-
-
-	}
-
-	// --- COPY DATA TO HOST ---------------------------------------------------
-	// Velocity
-	error_h = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
-	error_check(error_h, "clEnqueueReadBuffer", 1);
-
-	write_lattice_field(u_h, &intDat);
-
-	// Cleanup
-#define X(kernelName) clReleaseKernel(kernelDat.kernelName);
-	LIST_OF_KERNELS
-#undef X
-	clReleaseMemObject(fA_cl);
-	clReleaseMemObject(fB_cl);
-	clReleaseMemObject(intDat_cl);
-	clReleaseMemObject(flpDat_cl);
-
-	return 0;
-}
+#include "main.c"
 
 // Function to set up data arrays and read input file
 int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_param_struct* hostDat)
@@ -281,7 +27,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"iterations", TYPE_INT, &(intDat->MaxIterations), "1000"},
 		{"console_print_freq", TYPE_INT, &(hostDat->ConsolePrintFreq), "10"},
 		{"constant_body_force", TYPE_FLOAT_3VEC, &(flpDat->ConstBodyForce), "0.0 0.0 0.0"},
-		{"newtonian_tau", TYPE_FLOAT, &(flpDat->NewtonianTau), "0.8"},
+		{"newtonian_tau", TYPE_FLOAT, &(flpDat->NewtonianTau), "1.0"},
 		{"viscosity_model", TYPE_INT, &(intDat->ViscosityModel), "0"},
 		{"viscosity_params", TYPE_FLOAT_4VEC, &(flpDat->ViscosityParams), "0.0 0.0 0.0 0.0"},
 		{"total_lattice_size", TYPE_INT_3VEC, &(intDat->LatticeSize), "32 32 32"},
@@ -293,11 +39,14 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"maintain_shear_rate", TYPE_INT_3VEC, &(intDat->MaintainShear), "0"},
 		{"velocity_bc_upper", TYPE_FLOAT_3VEC, &(flpDat->VelUpper), "0.0 0.0 0.0"},
 		{"velocity_bc_lower", TYPE_FLOAT_3VEC, &(flpDat->VelLower), "0.0 0.0 0.0"},
-		{"num_particles", TYPE_INT, &(intDat->NumParticles), "8.0"},
+		{"num_particles", TYPE_INT, &(intDat->NumParticles), "0"},
 		{"initial_particle_distribution", TYPE_INT, &(hostDat->InitialParticleDistribution), "1"},
-		{"initial_particle_buffer", TYPE_FLOAT, &(hostDat->InitialParticleBuffer), "4.0"},
-		{"particle_diameter", TYPE_FLOAT, &(flpDat->ParticleSize), "8.0"},
-		{"max_surf_points_per_node", TYPE_INT, &(intDat->MaxSurfPointsPerNode), "16"},
+		{"initial_particle_buffer", TYPE_FLOAT, &(hostDat->ParticleBuffer), "4.0"},
+		{"particle_diameter", TYPE_FLOAT, &(flpDat->ParticleDiam), "8.0"},
+		{"particle_density", TYPE_FLOAT, &(hostDat->ParticleDensity), "1.0"},
+		{"particle_collision_model", TYPE_INT, &(intDat->ParForceModel), "1"},
+		{"particle_collision_params", TYPE_FLOAT, &(flpDat->ParForceParams), "0.0, 0.0"},
+		{"surf_point_write_atomic", TYPE_INT, &(intDat->MaxSurfPointsPerNode), "8"},
 		{"ibm_interpolation_mode", TYPE_INT, &(hostDat->InterpOrderIBM), "1"},
 		{"rebuild_neigh_list_freq", TYPE_INT, &(intDat->RebuildFreq), "10"}
 	};
@@ -337,7 +86,7 @@ int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_
 	
 	printf("Particle domain decomposition: %dx%dx%d\n", hostDat->DomainDecomp[0], hostDat->DomainDecomp[1], hostDat->DomainDecomp[2]);
 	
-	printf("Vicosity model %d\n", intDat->ViscosityModel);
+	printf("Viscosity model %d\n", intDat->ViscosityModel);
 	
 	if ((intDat->BoundaryConds[0]+intDat->BoundaryConds[1]+intDat->BoundaryConds[2]) > 1) {
 		printf("Error: More than 1 pair of faces with velocity boundaries not yet supported.\n");
@@ -347,9 +96,8 @@ int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_
 	return 0;
 }
 
-
 void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-		cl_float* f_h, cl_float* g_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h)
+		cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h, cl_uint* countPoint)
 {
 	printf("%s %s\n", "Initial distribution type ", hostDat->InitialDist);
 
@@ -371,14 +119,14 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 		equilibrium_distribution_D3Q19(1.0, vel, f_eq);
 
 		// Use propagation-optimized data layouts
-		for(int i_c=0; i_c<NumNodes; i_c++) {
+		for(int i_n=0; i_n<NumNodes; i_n++) {
 
 			for(int i_f=0; i_f<19; i_f++) {
-				f_h[i_c + i_f*NumNodes] = f_eq[i_f];
+				f_h[i_n + i_f*NumNodes] = f_eq[i_f];
 			}
-			u_h[i_c               ] = hostDat->InitialVel[0];
-			u_h[i_c +     NumNodes] = hostDat->InitialVel[1];
-			u_h[i_c +   2*NumNodes] = hostDat->InitialVel[2];
+			u_h[i_n               ] = hostDat->InitialVel[0];
+			u_h[i_n +     NumNodes] = hostDat->InitialVel[1];
+			u_h[i_n +   2*NumNodes] = hostDat->InitialVel[2];
 		}
 	}
 	else // Zero is default
@@ -388,54 +136,68 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 		equilibrium_distribution_D3Q19(1.0, vel, f_eq);
 
 		// Use propagation-optimized data layouts
-		for(int i_c=0; i_c<NumNodes; i_c++) {
+		for(int i_n=0; i_n<NumNodes; i_n++) {
 
 			for(int i_f=0; i_f<19; i_f++) {
-				f_h[i_c + i_f*NumNodes] = f_eq[i_f];
+				f_h[i_n + i_f*NumNodes] = f_eq[i_f];
 			}
-			u_h[i_c               ] = 0.0f;
-			u_h[i_c +     NumNodes] = 0.0f;
-			u_h[i_c +   2*NumNodes] = 0.0f;
+			u_h[i_n               ] = 0.0f;
+			u_h[i_n +     NumNodes] = 0.0f;
+			u_h[i_n +   2*NumNodes] = 0.0f;
 		}
 	}
 	
 	// Other fields
-	for(int i_c=0; i_c<NumNodes; i_c++) {
-		g_h[i_c               ] = flpDat->ConstBodyForce[0];
-		g_h[i_c +     NumNodes] = flpDat->ConstBodyForce[1];
-		g_h[i_c +   2*NumNodes] = flpDat->ConstBodyForce[2];
+	for(int i_n=0; i_n<NumNodes; i_n++) {
 		
-		tau_p_h[i_c] = 1.0;
+		tau_p_h[i_n] = flpDat->NewtonianTau;
+		countPoint[i_n] = 0;
 		
 		for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
-			gpf_h[i_c + NumNodes*(3*p)    ] = 0.0f;
-			gpf_h[i_c + NumNodes*(3*p + 1)] = 0.0f;
-			gpf_h[i_c + NumNodes*(3*p + 2)] = 0.0f;
+			gpf_h[i_n + NumNodes*(3*p)    ] = 0.0f;
+			gpf_h[i_n + NumNodes*(3*p + 1)] = 0.0f;
+			gpf_h[i_n + NumNodes*(3*p + 2)] = 0.0f;
 		}
 	}
 	
 }
 
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float4* parKinematics, cl_float4* parForces, cl_uint* pointIDs)
+	cl_float4* parKinematics, cl_float4* parForce, cl_float4** parFluidForce)
 {
-	// NxNxN Lattice, stationary particles (for approx. cubic systems)
+	printf("\nThere are %d particles.\n",intDat->NumParticles);
+	
+	flpDat->ParticleMass = (4.0f/3.0f)*M_PI*hostDat->ParticleDensity*pow(flpDat->ParticleDiam,3);
+	// 2*m*r^2/5;
+	flpDat->ParticleMomInertia = 0.1f*flpDat->ParticleMass*flpDat->ParticleDiam*flpDat->ParticleDiam;
+	
+	intDat->NumForceArrays = ceil((float)intDat->PointsPerParticle/(float)intDat->PointsPerWorkGroup);
+	
+	printf("\nNumber of particle force arrays needed = %d, (%d points, max %d per work group).\n\n", 
+		intDat->NumForceArrays, intDat->PointsPerParticle, intDat->PointsPerWorkGroup);
+		
+	*parFluidForce = (cl_float4*)malloc(intDat->NumParticles*sizeof(cl_float4)*intDat->NumForceArrays*2);
+	
+	int np = intDat->NumParticles;
+	
+	// Decide initial positions
 	if (hostDat->InitialParticleDistribution == 1) {
-		//
-		int gridSize = ceil(pow(intDat->NumParticles,1.0/3.0));
+		// NxNxN lattice, for approx. cubic systems
+		float pb = hostDat->ParticleBuffer;
+		int gridSize = ceil(pow(np,1.0/3.0));
 
 		if (gridSize == 0) {
 			perror("Error: InitialVel called without particles");
 		}
 
-		if (0.5*flpDat->ParticleSize > hostDat->InitialParticleBuffer) {
+		if (0.5*flpDat->ParticleDiam > pb) {
 			perror("Error: Particles begin overlapping walls");
 		}
 
-		float sp[3];
+		float sp[3]; // Spacing
 		if (gridSize > 1) {
 			for (int i = 0; i < 3; i++) {
-				sp[i] = (intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1) - 2*hostDat->InitialParticleBuffer;
+				sp[i] = intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1 - 2*pb;
 				sp[i] /= (gridSize-1);
 			}
 		}
@@ -445,34 +207,82 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 			}
 		}
 
-		float bw = hostDat->InitialParticleBuffer;
-
-		for(int p = 0; p < intDat->NumParticles; p++) {
-			cl_float px = bw + sp[0]*(p/(gridSize*gridSize));
-			cl_float py = bw + sp[1]*((p/gridSize)%gridSize);
-			cl_float pz = bw + sp[2]*(p%gridSize);
-
-			parKinematics[p                       ] = (cl_float4){px, py, pz, 0.0f};
-			parKinematics[p + intDat->NumParticles] = (cl_float4){px, py, pz, 0.0f};
+		for(int p = 0; p < np; p++) {
+			cl_float px = pb + sp[0]*(p/(gridSize*gridSize));
+			cl_float py = pb + sp[1]*((p/gridSize)%gridSize);
+			cl_float pz = pb + sp[2]*(p%gridSize);
+			// Position and velocity
+			parKinematics[p     ] = (cl_float4){px, py, pz, 0.0f};
+			parKinematics[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
 		}
 	}
-
-	for(int p = 0; p < intDat->NumParticles; p++) {
-		// Particle basis
-		parKinematics[p + 2*intDat->NumParticles] = (cl_float4){1.0, 0.0, 0.0, 0.0f};
-		parKinematics[p + 3*intDat->NumParticles] = (cl_float4){0.0, 1.0, 0.0, 0.0f};
-		parKinematics[p + 4*intDat->NumParticles] = (cl_float4){0.0, 0.0, 1.0, 0.0f};
+	else if (hostDat->InitialParticleDistribution == 2){
+		// NxNxM Lattice 
+		float pb = hostDat->ParticleBuffer;
+		float wM = intDat->LatticeSize[2]-pb-1;
+		float wN = intDat->LatticeSize[0]-pb-1;
+		
+		int mdn = ceil(wM/wN);
+	
+		int npl = 0, n = 0;
+		while(npl < np) {
+			n++;
+			npl = n*n*n*mdn;
+		}
+		int m = n*mdn;
+		printf("Choosing a %d x %d x %d lattice, max %d particles.\n", n, n, m, npl);
+		
+		float sp[3]; // Spacing
+		if (np > 1) {
+				sp[0] = (intDat->LatticeSize[0]-2*intDat->BufferSize[0]-1 - 2*pb)/(n-1);
+				sp[1] = (intDat->LatticeSize[1]-2*intDat->BufferSize[1]-1 - 2*pb)/(n-1);
+				sp[2] = (intDat->LatticeSize[2]-2*intDat->BufferSize[2]-1 - 2*pb)/(n*mdn-1);
+		}
+		else {
+			for (int i = 0; i < 3; i++) {
+				sp[i] = 0.0;
+			}
+		}
+		
+		printf("Lattice spacing = %f x %f x %f\n", sp[0], sp[1], sp[2]);
+		
+		for(int p = 0; p < np; p++) {
+			cl_float px = pb + sp[0]*(p/(n*m));
+			cl_float py = pb + sp[1]*((p/m)%n);
+			cl_float pz = pb + sp[2]*(p%m);
+			// Position and velocity
+			parKinematics[p     ] = (cl_float4){px, py, pz, 0.0f};
+			parKinematics[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+		}
+	}
+	else {
+		perror("Error: initial_particle_distribution option not a known value\n");
+	}
+	
+	// Angular quantities, forces and torque
+	for(int p = 0; p < np; p++) {
+		// Particle quaternion, last element is scalar part - easiest for use with float4 vectors
+		parKinematics[p + 2*np] = (cl_float4){0.0f, 0.0f, 0.0f, 1.0f};
 		// Angular velocity
-		parKinematics[p + 5*intDat->NumParticles] = (cl_float4){0.0, 0.0, 0.0, 0.0f};
+		parKinematics[p + 3*np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+		
+		parForce[p     ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+		parForce[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+		
+		for (int fa = 0; fa < intDat->NumForceArrays; fa++) {
+			(*parFluidForce)[p + np*(2*fa)    ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Force
+			(*parFluidForce)[p + np*(2*fa + 1)] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Torque
+		}
 	}
 
 }
 
 void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float4* parKinematics, cl_float4* parForces, cl_uint* pointIDs)
+	cl_float4* parKinematics, cl_int* parsZone, cl_int** parInZone, cl_uint** numParInZone, cl_int* parInThread, cl_uint* numParInThread,
+	zone_struct* zoneDat)
 {
-	// Calculate estimate of max particle velocity
-	float vMax = 0.1; // Min value
+	// Calculate estimate of max particle relative speed
+	float vMax = 0.05; // Guess
 	for (int i = 0; i < 3; i++) {
 		vMax = vMax < fabsf(flpDat->VelUpper[i]) ? fabsf(flpDat->VelUpper[i]) : vMax;
 		vMax = vMax < fabsf(flpDat->VelLower[i]) ? fabsf(flpDat->VelLower[i]) : vMax;
@@ -485,21 +295,105 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		printf("Warning: Estimate maybe inaccurate for forced flow of non-Newtonian fluids\n");
 	}
 	
-	// Compute neighbour zone width
-	float rMax = flpDat->ParticleSize; // Monodisperse for now
-	float zoneWidth = 2*(vMax*intDat->RebuildFreq + rMax);
-	printf("\nParticle neighbor zone width = %f\n", zoneWidth);
+	// Compute neighbor zone width
+	float dMax = flpDat->ParticleDiam; // Monodisperse for now
+	float minZoneWidth = 2*(vMax*intDat->RebuildFreq) + dMax;
+	printf("\nMinimum particle neighbor zone width = %f\n", minZoneWidth);
 	
 	// Compute number of zones in each dimension
 	for (int i = 0; i < 3; i++) {
-		float w = (float)(intDat->LatticeSize[i]-3);
-		int nZones = floor(w/zoneWidth) > 0 ? floor(w/zoneWidth) : 1;
-		printf("Num particle zones in dimension %d = %d\n", i, nZones);
+		// Total size in i'th dimension
+		float w = (float)(intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1); 
+		intDat->NumZones[i] = floor(w/minZoneWidth) > 0 ? floor(w/minZoneWidth) : 1;
+		flpDat->ZoneWidth[i] = w/intDat->NumZones[i];
+		printf("Number of particle zones in dimension %d = %d\n", i, intDat->NumZones[i]);
+	}
+	printf("\nActual particle neighbor zone width = %f x %f x %f\n", flpDat->ZoneWidth[0], flpDat->ZoneWidth[1], flpDat->ZoneWidth[2]);
+	
+	// Assign particles to threads and zones
+	int numParThreads = hostDat->DomainDecomp[0]*hostDat->DomainDecomp[1]*hostDat->DomainDecomp[2];
+	int totalNumZones = intDat->NumZones[0]*intDat->NumZones[1]*intDat->NumZones[2];
+	zoneDat = (zone_struct*)malloc(totalNumZones*sizeof(zone_struct));
+	
+	printf("Total number of zones = %d\n", totalNumZones);
+	
+	*parInZone = (cl_int*)malloc(totalNumZones*intDat->NumParticles*sizeof(cl_int));
+	*numParInZone = (cl_uint*)calloc(totalNumZones, sizeof(cl_uint));
+	
+	for (int p = 0; p < intDat->NumParticles; p++) {
+		
+		// Particles always belong to their initial thread
+		int thread = (int)(numParThreads*p)/intDat->NumParticles;
+		int np = numParInThread[thread]++;
+		parInThread[thread*intDat->NumParticles + np] = p;
+		printf("Particle %d belongs to thread %d\n", p, thread+1);
+		printf("Thread %d now has %d particles.\n", thread+1, np+1);
+		
+		printf("Particle %d has position ", p);
+		printf("%f %f %f\n", parKinematics[p].x, parKinematics[p].y, parKinematics[p].z);
+		
+		int zoneIDx = parKinematics[p].x/flpDat->ZoneWidth[0];
+		int zoneIDy = parKinematics[p].y/flpDat->ZoneWidth[1];
+		int zoneIDz = parKinematics[p].z/flpDat->ZoneWidth[2];
+		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
+		
+		parsZone[p] = zoneID;
+		(*parInZone)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
+		//
+		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p+1, (*numParInZone)[zoneID], 
+			zoneID, zoneIDx, zoneIDy, zoneIDz);
+		
 	}
 	
+	// Loop over zones and neighbors (x on inner loop to match GPU arrays)
+	for (int k = 0; k < intDat->NumZones[2]; k++) {
+		//
+		for (int j = 0; j < intDat->NumZones[1]; j++) {
+			//
+			for (int i = 0; i < intDat->NumZones[0]; i++) {
+				
+				int zoneID = i + intDat->NumZones[0]*(j + intDat->NumZones[2]*k);
+				zoneDat[zoneID].NumNeighbors = 0;
+				
+				int lm = -1; int lp = 1; int mm = -1; int mp = 1; int nm = -1; int np = 1; 
+				
+				// Consider type 1 velocity BCs to be non-periodic, so don't add zones in that direction
+				if (intDat->BoundaryConds[0] == 1 && i == 0) {lm = 0;}
+				if (intDat->BoundaryConds[1] == 1 && j == 0) {mm = 0;}
+				if (intDat->BoundaryConds[2] == 1 && k == 0) {nm = 0;}
+				if (intDat->BoundaryConds[0] == 1 && i == intDat->NumZones[0]-1) {lp = 0;}
+				if (intDat->BoundaryConds[1] == 1 && j == intDat->NumZones[1]-1) {mp = 0;}
+				if (intDat->BoundaryConds[2] == 1 && k == intDat->NumZones[2]-1) {np = 0;}
+				
+				for (int n = nm; n <= np; n++) {
+					//
+					for (int m = mm; m <= mp; m++) {
+						//
+						for (int l = lm; l <= lp; l++) {
+							
+							// Shifted to neighbor location
+							int ls = i+l; int ms = j+m; int ns = k+n;
+							
+							// Wrapped around boundaries
+							int lw = ls < 0 ? intDat->NumZones[0]-1 : ls%intDat->NumZones[0];
+							int mw = ms < 0 ? intDat->NumZones[1]-1 : ms%intDat->NumZones[1];
+							int nw = ns < 0 ? intDat->NumZones[2]-1 : ns%intDat->NumZones[2];
+								
+							int neighID = lw + intDat->NumZones[0]*(mw + intDat->NumZones[2]*(nw));
+							
+							//printf("Zone %d (%d,%d,%d) has neighbor %d (%d,%d,%d)\n", zoneID,i,j,k, neighID,lw,mw,nw);
+							
+							int numNeighs = zoneDat[zoneID].NumNeighbors++;
+							zoneDat->NeighborZones[numNeighs] = neighID;
+						}
+					}
+				}
+			}	
+		}	
+	}	
 }
 
-int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_struct* kernelDat)
+int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices)
 {
 	char* programSourceCPU = NULL;
 	char* programSourceGPU = NULL;
@@ -514,28 +408,24 @@ int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_stru
 	read_program_source(&programSourceGPU, programNameGPU);
 
 	// Create and build programs for devices
-	programCPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceCPU,
-		NULL, &error);
-	error_check(error, "clCreateProgramWithSource CPU", 1);
-
-	// Build for devices
-	clBuildProgram(programCPU, 1, &devices[0], NULL, NULL, &error);
-	error_check(error, "clBuildProgram CPU", 1);
-
 	programGPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceGPU,
 		NULL, &error);
 	error_check(error, "clCreateProgramWithSource GPU", 1);
 
 	clBuildProgram(programGPU, 1, &devices[1], NULL, NULL, &error);
 	error_check(error, "clBuildProgram GPU", 1);
+	
+	// CPU
+	programCPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceCPU,
+		NULL, &error);
+	error_check(error, "clCreateProgramWithSource CPU", 1);
+
+	clBuildProgram(programCPU, 1, &devices[0], NULL, NULL, &error);
+	error_check(error, "clBuildProgram CPU", 1);
 
 	// Select kernels from program
-	//kernelDat->CPU_sphere_collide = clCreateKernel(programCPU, "CPU_sphere_collide", &error);
-	//if (!error_check(error, "clCreateKernel CPU", 1))
-	//	print_program_build_log(&programCPU, &devices[0]);
-
-	kernelDat->collideSRT_stream_D3Q19 =
-		clCreateKernel(programGPU, "collideMRT_stream_D3Q19", &error);
+	// GPU
+	kernelDat->collideSRT_stream_D3Q19 = clCreateKernel(programGPU, "collideMRT_stream_D3Q19", &error);
 	if (!error_check(error, "clCreateKernel GPU_collide_stream", 1))
 		print_program_build_log(&programGPU, &devices[1]);
 
@@ -546,7 +436,37 @@ int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_stru
 	kernelDat->boundary_periodic = clCreateKernel(programGPU, "boundary_periodic", &error);
 	if (!error_check(error, "clCreateKernel boundary_periodic", 1))
 		print_program_build_log(&programGPU, &devices[1]);
+	
+	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(programGPU, "particle_fluid_forces_linear_stencil", &error);
+	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
+		print_program_build_log(&programGPU, &devices[1]);
+	
+	// CPU
+	kernelDat->particle_dynamics = clCreateKernel(programCPU, "particle_dynamics", &error);
+	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
+		print_program_build_log(&programCPU, &devices[0]);
+		
+	kernelDat->particle_particle_forces = clCreateKernel(programCPU, "particle_particle_forces", &error);
+	if (!error_check(error, "particle_particle_forces", 1))
+		print_program_build_log(&programCPU, &devices[0]);
+	
+	kernelDat->update_particle_zones = clCreateKernel(programCPU, "update_particle_zones", &error);
+	if (!error_check(error, "update_particle_zones", 1))
+		print_program_build_log(&programCPU, &devices[0]);
 
+	size_t actualWorkGrpSize;
+	clGetKernelWorkGroupInfo(kernelDat->particle_fluid_forces_linear_stencil, devices[1],
+		CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &actualWorkGrpSize, NULL);
+		
+	int tempSize = (cl_int)actualWorkGrpSize;
+	int power2 = ceil(log2(tempSize)-1E-6);
+	int workSize = 1;	// Integer exponentiation 2^power2
+	for(int i = 0; i < power2; i++) {
+		workSize *= 2;
+	}
+	intDat->PointsPerWorkGroup = workSize;
+	
+	printf("Max work group size of fluid-particle kernel = %d.\n", intDat->PointsPerWorkGroup);
 
 	clReleaseProgram(programCPU);
 	clReleaseProgram(programGPU);
@@ -554,26 +474,31 @@ int create_LB_kernels(cl_context* contextPtr, cl_device_id* devices, kernel_stru
 	return 0;
 }
 
-void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, cl_float4* sphereNodesXYZ)
+void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, cl_float4** spherePoints)
 {
 	// Calculated surface area
-	float d = flpDat->ParticleSize;
+	float d = flpDat->ParticleDiam;
 	float area = M_PI*d*d;
-	int numNodes = 1;
+	int numPoints = 1;
 	int power2 = ceil(log2(area));
 
 	// Integer exponentiation 2^power2
 	for(int i = 0; i < power2; i++) {
-		numNodes *= 2;
+		numPoints *= 2;
 	}
+	numPoints = numPoints < 128 ? 128 : numPoints;
+	numPoints = numPoints > 1024 ? 1024 : numPoints;
 
-	sphereNodesXYZ = (cl_float4*)calloc(numNodes,sizeof(cl_float4));
-	intDat->TotalSurfPoints = numNodes*intDat->NumParticles;
+	printf("Number of surface points per particle = %d.\n", numPoints);
+	*spherePoints = (cl_float4*)malloc(numPoints*sizeof(cl_float4));
+	intDat->PointsPerParticle = numPoints;
+	intDat->TotalSurfPoints = numPoints*intDat->NumParticles;
 
 	// Take discretization with num nodes > surface area in lattice units
 	char sphereFilename[128];
 	char sphereFolder[] = "unit_sphere_partitions/";
-	sprintf(sphereFilename, "%s%s%d%s", sphereFolder, "unit_sphere_partition_", numNodes, ".txt");
+	sprintf(sphereFilename, "%s%s%d%s", sphereFolder, "unit_sphere_partition_", numPoints, ".txt");
+	printf("Reading sphere discretization from %s\n", sphereFilename);
 
 	FILE* fs;
 	fs = fopen(sphereFilename, "r");
@@ -584,16 +509,13 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 
 	char fLine[128];
 	int nodesRead = 0;
-	float nx, ny, nz;
+	float px, py, pz;
 
-	for(int n=0; n<numNodes; n++) {
-		fscanf(fs, "%f,%f,%f\n", &nx, &ny, &nz);
-		//printf("%s %f,%f,%f\n", "Read node coordinates ", nx, ny, nz);
-
-		sphereNodesXYZ[n] = (cl_float4){nx, ny, nz, 0.0};
+	for(int n=0; n<numPoints; n++) {
+		fscanf(fs, "%f,%f,%f\n", &px, &py, &pz);
+		(*spherePoints)[n] = (cl_float4){px, py, pz, 0.0};
+		//printf("Sphere point %d read %f,%f,%f\n", n, px, py, pz);
 	}
-
-	// Error if number of nodes read does not match expected
 
 	fclose(fs);
 }
@@ -689,7 +611,7 @@ int display_input_params(int_param_struct* intDat, flp_param_struct* flpDat)
 }
 
 // Function to lookup the OpenCL platform, and determine the CPU and GPU device to use
-void analyse_platform(cl_device_id* devices)
+void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 {
 	printf("Analysing platform... \n");
 
@@ -784,10 +706,11 @@ void analyse_platform(cl_device_id* devices)
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE, sizeof(buf_mem), &buf_mem, NULL);
 		printf("CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE = %llu\n", (unsigned long long)buf_mem);
 
-		size_t buf_wi_size[3];
-		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, sizeof(buf_wi_size), &buf_wi_size, NULL);
-		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n\n", (unsigned long)buf_wi_size[0],
-			(unsigned long)buf_wi_size[1], (unsigned long)buf_wi_size[2]);
+		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, 3*sizeof(size_t), &hostDat->WorkItemSizes, NULL);
+		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n", (unsigned long)hostDat->WorkItemSizes[0],
+			(unsigned long)hostDat->WorkItemSizes[1], (unsigned long)hostDat->WorkItemSizes[2]);		
+		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &hostDat->MaxWorkGroupSize, NULL);
+		printf("CL_DEVICE_MAX_WORK_GROUP_SIZE = %lu \n\n", (unsigned long)hostDat->MaxWorkGroupSize);
 	}
 
 	// Deal with double precision, and case where there is no GPU
