@@ -9,6 +9,7 @@ typedef float Real;
 #endif
 
 #define CASSON
+#define USE_VARIABLE_BODY_FORCE
 #define MIN_TAU 0.505
 
 #include "struct_header_device.h"
@@ -21,13 +22,14 @@ float compute_tau(float srtII, __global float* params);
 
 __kernel void particle_fluid_forces_linear_stencil(
 	__global int_param_struct* intDat,
+	__global flp_param_struct* flpDat,
 	__global float* gpf,
 	__global float* u,
 	__global float4* parKin,
 	__global float4* parFluidForce,
 	__global float4* parFluidForceSum,
 	__global float4* spherePoints,
-	__global uint* countPoints)
+	volatile __global int* countPoint)
 {
 	int globalID = get_global_id(0); // 1D kernel execution
 	int globalSize = get_global_size(0);
@@ -38,12 +40,17 @@ __kernel void particle_fluid_forces_linear_stencil(
 	int groupID = get_group_id(0);
 	int numGroups = get_num_groups(0);
 	
+	//printf("globalID, globalSize  %d  %d\n", globalID, globalSize);
+	//printf("localID, localSize    %d  %d\n", localID, localSize);
+	//printf("groupID, numGroups    %d  %d\n", groupID, numGroups);
+	
 	int np = intDat->NumParticles;
 	
 	// Get particle ID for this node
-	int PointsPerParticle = intDat->TotalSurfPoints/intDat->NumParticles;
-	int parID = globalID/PointsPerParticle; // Requires same number of nodes for each particle
-	int pointID = globalID%PointsPerParticle;
+	int parID = globalID/intDat->PointsPerParticle; // Requires same number of nodes for each particle
+	int pointID = globalID%intDat->PointsPerParticle;
+	
+	//printf("parID, pointID %d  %d\n", parID, pointID);
 
 	// Get lattice size info, for reading and writing velocity and force
 	int N_x = intDat->LatticeSize[0];
@@ -51,80 +58,92 @@ __kernel void particle_fluid_forces_linear_stencil(
 	int N_z = intDat->LatticeSize[2];
 	int N_C = N_x*N_y*N_z; // Total nodes
 
-	//uint pointNum = pointIDs[nID + intDat->TotalSurfPoints];
-
 	// Get particle kinetmatic data for this node
-	float4 xp, vp, angVel;
-	for(int i = 0; i < 3; i++) {
-		xp = parKin[parID]; // Position
-		vp = parKin[parID + np]; // Velocity
-		angVel = parKin[parID + 3*np]; // Angular velocity
-	}
+	float4 xPar = parKin[parID]; // Position
+	float4 vPar = parKin[parID + np]; // Velocity
+	float4 angVel = parKin[parID + 3*np]; // Angular velocity
+	
+	//printf("point = %d, xp = %f %f %f (%f)\n", pointID, xp.x, xp.y, xp.z, xp.w);
+	//printf("point = %d, vp = %f %f %f (%f)\n", pointID, vp.x, vp.y, vp.z, vp.w);
+	//printf("point = %d, angVel = %f %f %f (%f)\n", pointID, angVel.x, angVel.y, angVel.z, angVel.w);
 
 	// Lookup original position of this point relative to particle center
-	float4 r0 = spherePoints[pointID];
+	float4 r_0 = spherePoints[pointID];
+	//printf("point = %d,r0 = %f %f %f (%f)\n", pointID, r0.x, r0.y, r0.z, r0.w);
 	
-	// Apply rotation (shouldn't be needed for spherical particles)
+	// Apply rotation matrix (shouldn't be needed for spherical particles)
 	//float4 r2 = (float4){0.0, 0.0, 0.0, 0.0};
 	//r2 = e1*r.x + e2*r.y + e3*r.z;
 
 	// Absolute position of point
-	float4 r_p = xp + r0;
+	float4 r_p = xPar + r_0;
 
-	// Adjust for periodic BCs
-	float4 w = (float4)(N_x-3.0f, N_y-3.0f, N_z-3.0f, 0.0f); // lattice buffer = 1
+	// Adjust for periodic BCs (assume buffer of 1 unit for now)
+	float4 w = (float4)(N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f); // w is set to 1 to avoid nan when using fmod()
 	float4 r_pp = fmod(r_p,w);
+	
+	//printf("point = %d, r_p = %f %f %f (%f)\n", pointID, r_p.x, r_p.y, r_p.z, r_p.w);
+	//printf("point = %d, r_pp = %f %f %f (%f)\n", pointID, r_pp.x, r_pp.y, r_pp.z, r_pp.w);
 
-	// Location of corner closest to origin (cast as float because used as coordinate)
-	int x_0 = floor(r_pp.x) + intDat->BufferSize[0];
-	int y_0 = floor(r_pp.y) + intDat->BufferSize[1];
-	int z_0 = floor(r_pp.z) + intDat->BufferSize[2];
+	// Location of corner closest to origin 
+	int x_i0 = (int)floor(r_pp.x) + intDat->BufferSize[0];
+	int y_i0 = (int)floor(r_pp.y) + intDat->BufferSize[1];
+	int z_i0 = (int)floor(r_pp.z) + intDat->BufferSize[2];
+	
+	//printf("point = %d, r_floor = %d %d %d\n", pointID, x_0, y_0, z_0);
 	
 	// Linear stencil interpolation weightings
-	int sten[8][3] = {{0,0,0}, {0,0,1}, {0,1,0}, {0,1,1}, {1,0,0}, {1,0,1}, {1,1,0}, {1,1,1}};
+	int sten[8][3] = {{0,0,0}, {1,0,0}, {0,1,0}, {0,0,1}, {1,1,0}, {1,0,1}, {0,1,1}, {1,1,1}};
 	float weights[8];
-	float4 u_pp = (float4){0.0, 0.0, 0.0, 0.0};
+	float4 u_pp = (float4){0.0f, 0.0f, 0.0f, 0.0f};
 	
+	//float sumW = 0.0;
 	for(int n = 0; n < 8; n++) {
 		//
-		int x_n = x_0 + sten[n][0];
-		int y_n = y_0 + sten[n][1];
-		int z_n = z_0 + sten[n][2];
+		int x_n = x_i0 + sten[n][0];
+		int y_n = y_i0 + sten[n][1];
+		int z_n = z_i0 + sten[n][2];
 		int i_1D = x_n + N_x*(y_n + N_y*z_n);
 		
-		float wx = 1.0f - fabs(r_pp.x-(float)x_n);
-		float wy = 1.0f - fabs(r_pp.y-(float)y_n);
-		float wz = 1.0f - fabs(r_pp.z-(float)z_n);
+		//                lattice buffer v
+		float wx = 1.0f - fabs(r_pp.x + 1.0f - (float)x_n);
+		float wy = 1.0f - fabs(r_pp.y + 1.0f - (float)y_n);
+		float wz = 1.0f - fabs(r_pp.z + 1.0f - (float)z_n);
+		//printf("x_n, shifted r_pp.x, wx: %d-%f, %f\n", x_n, r_pp.x + 1.0f, wx);
 		
 		weights[n] = wx*wy*wz;
+		//sumW += weights[n];
 		
 		// Interpolate velocity
-		u_pp.x += u[i_1D        ];
-		u_pp.y += u[i_1D +   N_C];
-		u_pp.z += u[i_1D + 2*N_C];
+		u_pp.x += weights[n]*u[i_1D        ];
+		u_pp.y += weights[n]*u[i_1D +   N_C];
+		u_pp.z += weights[n]*u[i_1D + 2*N_C];
 	}
+	//printf("weight sum: %f\n", sumW);
+	//printf("point = %d, u_pp = %f %f %f (%f)\n", pointID, u_pp.x, u_pp.y, u_pp.z, u_pp.w);
 
 	// Calculate velocity of node
-	float4 v_pp = vp + cross(angVel,r_pp); // Order is important
+	float4 v_pp = vPar + cross(angVel,r_pp); // Order is important
 
 	// Direct forcing velocity delta
-	float fCoeff = 1.0f;
-	float4 vuForce = v_pp - u_pp; // Proportional to force on fluid
-	float4 vuTorque = cross(r0,vuForce);
+	float4 vuForce = (u_pp - v_pp); // Proportional to force on particle, prop. const. = 1 for now
+	float4 vuTorque = cross(r_0,vuForce);
 
 	// Distribute force to 8 nodes
 	for(int n = 0; n < 8; n++) {
 		//
-		int x_n = x_0 + sten[n][0];
-		int y_n = y_0 + sten[n][1];
-		int z_n = z_0 + sten[n][2];
+		int x_n = x_i0 + sten[n][0];
+		int y_n = y_i0 + sten[n][1];
+		int z_n = z_i0 + sten[n][2];
 		int i_1D = x_n + N_x*(y_n + N_y*z_n);
 		
-		int pTemp = atomic_inc(&countPoints[i_1D]); // The p'th time a surface point writes to this node
-		int p = pTemp%intDat->MaxSurfPointsPerNode;
-		gpf[i_1D + N_C*(3*p)	] += weights[n]*vuForce.x;
-		gpf[i_1D + N_C*(3*p + 1)] += weights[n]*vuForce.y;
-		gpf[i_1D + N_C*(3*p + 2)] += weights[n]*vuForce.z;
+		int writeCount = atomic_inc(countPoint+i_1D); // The p'th time a surface point writes to this node
+		int j = writeCount%intDat->MaxSurfPointsPerNode;
+		//printf("i_1D, writeCount, j, area = %d, %d, %d, %f\n", i_1D, writeCount, j, flpDat->PointArea);
+		
+		gpf[i_1D + N_C*(3*j)	] -= weights[n]*flpDat->PointArea*vuForce.x;
+		gpf[i_1D + N_C*(3*j + 1)] -= weights[n]*flpDat->PointArea*vuForce.y;
+		gpf[i_1D + N_C*(3*j + 2)] -= weights[n]*flpDat->PointArea*vuForce.z;
 	}
 	
 	parFluidForceSum[globalID] = vuForce;
@@ -136,6 +155,9 @@ __kernel void particle_fluid_forces_linear_stencil(
 	// Work group size must be power of 2
 	for(int i_s = localSize/2; i_s>0; i_s >>= 1) {
 		if(localID < i_s) {
+			
+			//printf("Sum reduction: %d += %d\n", globalID, globalID + i_s);
+			//printf("Sum reduction: %d += %d\n", globalID + globalSize, globalID + i_s + globalSize);
 			parFluidForceSum[globalID] += parFluidForceSum[globalID + i_s]; // Force 
 			parFluidForceSum[globalID + globalSize] += parFluidForceSum[globalID + i_s + globalSize]; // Torque
 		}
@@ -143,6 +165,8 @@ __kernel void particle_fluid_forces_linear_stencil(
 	}
 
 	if(localID == 0) {
+		//printf("Sum return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID, globalID);
+		//printf("Sum return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
 		parFluidForce[groupID] = parFluidForceSum[globalID]; // Return summed force 
 		parFluidForce[groupID + numGroups] = parFluidForceSum[globalID + globalSize]; // Summed torque
 	}
@@ -155,6 +179,7 @@ __kernel void collideMRT_stream_D3Q19(
 	__global float* gpf,
 	__global float* u,
 	__global float* tau_p,
+	__global uint* countPointWrite,
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat) // Params could be const or local if supported
 {
@@ -190,17 +215,18 @@ __kernel void collideMRT_stream_D3Q19(
 
 #ifdef USE_VARIABLE_BODY_FORCE
 
-	// Sum force contributions
-	int N_C3 = N_C*3;
-
-	// Try partial sum instead
-	for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
-		g_x += gfp[i_1D + NC*(3*p)	  ];
-		g_y += gfp[i_1D + NC*(3*p + 1)];
-		g_z += gfp[i_1D + NC*(3*p + 2)];
+	// Sum force contributions (could implement partial sum)
+	for (int j = 0; j < intDat->MaxSurfPointsPerNode; j++) {
+		g_x += gpf[i_1D + N_C*(3*j)    ];
+		g_y += gpf[i_1D + N_C*(3*j + 1)];
+		g_z += gpf[i_1D + N_C*(3*j + 2)];
+		
+		gpf[i_1D + N_C*(3*j)    ] = 0.0f;
+		gpf[i_1D + N_C*(3*j + 1)] = 0.0f;
+		gpf[i_1D + N_C*(3*j + 2)] = 0.0f;
 	}
 	
-	countPoints[i_1D] = 0;
+	countPointWrite[i_1D] = 0;
 
 #endif
 
@@ -211,7 +237,7 @@ __kernel void collideMRT_stream_D3Q19(
 	float u_z = (f[5]-f[6]+f[9]-f[10]+f[13]-f[14]+f[15]-f[16]+f[17]-f[18] + 0.5f*g_z)/rho;
 
 	// Write to __global *u
-	u[i_1D		  ] = u_x;
+	u[i_1D        ] = u_x;
 	u[i_1D +   N_C] = u_y;
 	u[i_1D + 2*N_C] = u_z;
 

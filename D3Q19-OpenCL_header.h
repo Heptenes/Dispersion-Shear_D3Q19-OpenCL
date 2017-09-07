@@ -35,7 +35,31 @@
 	X(particle_dynamics) \
 	X(particle_particle_forces) \
 	X(particle_fluid_forces_linear_stencil) \
-	X(update_particle_zones) \
+	X(update_particle_zones)
+
+
+#define LIST_OF_CL_MEM \
+	X(intDat_cl) \
+	X(flpDat_cl) \
+	X(fA_cl) \
+	X(fB_cl) \
+	X(u_cl) \
+	X(gpf_cl) \
+	X(countPoint_cl) \
+	X(tau_p_cl) \
+	X(parKin_cl) \
+	X(parForce_cl) \
+	X(parFluidForce_cl) \
+	X(parFluidForceSum_cl) \
+	X(spherePoints_cl) \
+	X(strMap_cl) \
+	X(parsZone_cl) \
+	X(zoneMembers_cl) \
+	X(numParInZone_cl) \
+	X(threadMembers_cl) \
+	X(numParInThread_cl) \
+	X(zoneDat_cl)
+
 
 #include "struct_header_host.h"
 
@@ -87,15 +111,15 @@ int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams, 
 int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_param_struct* hostDat);
 
 void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h, cl_uint* countPoint);
-	
+	cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h, cl_int* countPoint);
+
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float4* parKinematics, cl_float4* parForce, cl_float4** parFluidForce);
-	
+
 void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float4* parKinematics, cl_int* parsZone, cl_int** parsInZone, cl_uint** numParsInZone, cl_int* parsInThread,
-	cl_uint* numParsInThread, zone_struct* zoneDat);
-	
+	cl_uint* numParsInThread, zone_struct** zoneDat);
+
 int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq);
 
 int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputDefaultSize);

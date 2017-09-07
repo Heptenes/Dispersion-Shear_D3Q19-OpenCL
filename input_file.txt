@@ -1,4 +1,4 @@
-iterations                      1
+iterations                      5
 console_print_freq              1
 constant_body_force             0.0001 0.0 0.0
 newtonian_tau                   0.9
@@ -6,7 +6,7 @@ newtonian_tau                   0.9
 viscosity_model                 1
 viscosity_params                0.0005 0.01
 
-total_lattice_size              32 32 32
+total_lattice_size              16 16 16 
 initial_f                       constant
 initial_vel                     0.0 0.0 0.0
 boundary_conditions_xyz         0 0 1
@@ -14,11 +14,13 @@ velocity_bc_upper               0.0 0.0 0.0
 velocity_bc_lower               0.0 0.0 0.0
 cpu_only_mode                   0
 
+domain_decomposition            4 1 1
+
 num_particles                   1
-particle_diameter               8.0
-initial_particle_buffer         8.0
+particle_diameter               7.5
+initial_particle_buffer         6.5
 initial_particle_distribution   2
-rebuild_neigh_list_freq         20
+rebuild_neigh_list_freq         10
 
 particle_collision_model        1
 particle_collision_params       1.0  0.0

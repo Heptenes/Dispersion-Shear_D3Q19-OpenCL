@@ -48,6 +48,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"particle_collision_params", TYPE_FLOAT, &(flpDat->ParForceParams), "0.0, 0.0"},
 		{"surf_point_write_atomic", TYPE_INT, &(intDat->MaxSurfPointsPerNode), "8"},
 		{"ibm_interpolation_mode", TYPE_INT, &(hostDat->InterpOrderIBM), "1"},
+		{"direct_forcing_coeff", TYPE_FLOAT, &(flpDat->DirectForcingCoeff), "1.0"},
 		{"rebuild_neigh_list_freq", TYPE_INT, &(intDat->RebuildFreq), "10"}
 	};
 
@@ -97,7 +98,7 @@ int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_
 }
 
 void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-		cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h, cl_uint* countPoint)
+		cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h, cl_int* countPoint)
 {
 	printf("%s %s\n", "Initial distribution type ", hostDat->InitialDist);
 
@@ -170,6 +171,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	flpDat->ParticleMass = (4.0f/3.0f)*M_PI*hostDat->ParticleDensity*pow(flpDat->ParticleDiam,3);
 	// 2*m*r^2/5;
 	flpDat->ParticleMomInertia = 0.1f*flpDat->ParticleMass*flpDat->ParticleDiam*flpDat->ParticleDiam;
+	printf("Mass = %f, moment of inertia = %f\n", flpDat->ParticleMass, flpDat->ParticleMomInertia);
 	
 	intDat->NumForceArrays = ceil((float)intDat->PointsPerParticle/(float)intDat->PointsPerWorkGroup);
 	
@@ -278,8 +280,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 }
 
 void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float4* parKinematics, cl_int* parsZone, cl_int** parInZone, cl_uint** numParInZone, cl_int* parInThread, cl_uint* numParInThread,
-	zone_struct* zoneDat)
+	cl_float4* parKinematics, cl_int* parsZone, cl_int** zoneMembers, cl_uint** numParInZone, cl_int* threadMembers, cl_uint* numParInThread,
+	zone_struct** zoneDat)
 {
 	// Calculate estimate of max particle relative speed
 	float vMax = 0.05; // Guess
@@ -313,11 +315,11 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	// Assign particles to threads and zones
 	int numParThreads = hostDat->DomainDecomp[0]*hostDat->DomainDecomp[1]*hostDat->DomainDecomp[2];
 	int totalNumZones = intDat->NumZones[0]*intDat->NumZones[1]*intDat->NumZones[2];
-	zoneDat = (zone_struct*)malloc(totalNumZones*sizeof(zone_struct));
+	*zoneDat = (zone_struct*)malloc(totalNumZones*sizeof(zone_struct));
 	
 	printf("Total number of zones = %d\n", totalNumZones);
 	
-	*parInZone = (cl_int*)malloc(totalNumZones*intDat->NumParticles*sizeof(cl_int));
+	*zoneMembers = (cl_int*)malloc(totalNumZones*intDat->NumParticles*sizeof(cl_int));
 	*numParInZone = (cl_uint*)calloc(totalNumZones, sizeof(cl_uint));
 	
 	for (int p = 0; p < intDat->NumParticles; p++) {
@@ -325,9 +327,9 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		// Particles always belong to their initial thread
 		int thread = (int)(numParThreads*p)/intDat->NumParticles;
 		int np = numParInThread[thread]++;
-		parInThread[thread*intDat->NumParticles + np] = p;
-		printf("Particle %d belongs to thread %d\n", p, thread+1);
-		printf("Thread %d now has %d particles.\n", thread+1, np+1);
+		threadMembers[thread*intDat->NumParticles + np] = p;
+		printf("Particle %d belongs to thread %d\n", p, thread);
+		printf("Thread %d now has %d particles.\n", thread, np+1);
 		
 		printf("Particle %d has position ", p);
 		printf("%f %f %f\n", parKinematics[p].x, parKinematics[p].y, parKinematics[p].z);
@@ -338,14 +340,14 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
 		
 		parsZone[p] = zoneID;
-		(*parInZone)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
+		(*zoneMembers)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
 		//
-		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p+1, (*numParInZone)[zoneID], 
+		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID], 
 			zoneID, zoneIDx, zoneIDy, zoneIDz);
 		
 	}
 	
-	// Loop over zones and neighbors (x on inner loop to match GPU arrays)
+	// Loop over zones and add neighbors (x on inner loop to match GPU arrays)
 	for (int k = 0; k < intDat->NumZones[2]; k++) {
 		//
 		for (int j = 0; j < intDat->NumZones[1]; j++) {
@@ -353,7 +355,7 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 			for (int i = 0; i < intDat->NumZones[0]; i++) {
 				
 				int zoneID = i + intDat->NumZones[0]*(j + intDat->NumZones[2]*k);
-				zoneDat[zoneID].NumNeighbors = 0;
+				(*zoneDat)[zoneID].NumNeighbors = 0;
 				
 				int lm = -1; int lp = 1; int mm = -1; int mp = 1; int nm = -1; int np = 1; 
 				
@@ -382,9 +384,8 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 							int neighID = lw + intDat->NumZones[0]*(mw + intDat->NumZones[2]*(nw));
 							
 							//printf("Zone %d (%d,%d,%d) has neighbor %d (%d,%d,%d)\n", zoneID,i,j,k, neighID,lw,mw,nw);
-							
-							int numNeighs = zoneDat[zoneID].NumNeighbors++;
-							zoneDat->NeighborZones[numNeighs] = neighID;
+							int numNeighs = (*zoneDat)[zoneID].NumNeighbors++;							
+							(*zoneDat)[zoneID].NeighborZones[numNeighs] = neighID;
 						}
 					}
 				}
@@ -464,9 +465,11 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 	for(int i = 0; i < power2; i++) {
 		workSize *= 2;
 	}
-	intDat->PointsPerWorkGroup = workSize;
+	printf("Max work group size of fluid-particle kernel = %d.\n", workSize);
+		
+	intDat->PointsPerWorkGroup = workSize > intDat->PointsPerParticle ? intDat->PointsPerParticle : workSize;
 	
-	printf("Max work group size of fluid-particle kernel = %d.\n", intDat->PointsPerWorkGroup);
+
 
 	clReleaseProgram(programCPU);
 	clReleaseProgram(programGPU);
@@ -493,6 +496,7 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 	*spherePoints = (cl_float4*)malloc(numPoints*sizeof(cl_float4));
 	intDat->PointsPerParticle = numPoints;
 	intDat->TotalSurfPoints = numPoints*intDat->NumParticles;
+	flpDat->PointArea = area/(float)numPoints;
 
 	// Take discretization with num nodes > surface area in lattice units
 	char sphereFilename[128];
@@ -513,6 +517,9 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 
 	for(int n=0; n<numPoints; n++) {
 		fscanf(fs, "%f,%f,%f\n", &px, &py, &pz);
+		px *= 0.5f*flpDat->ParticleDiam; // Scale points (from unit sphere) by particle radius
+		py *= 0.5f*flpDat->ParticleDiam;
+		pz *= 0.5f*flpDat->ParticleDiam;
 		(*spherePoints)[n] = (cl_float4){px, py, pz, 0.0};
 		//printf("Sphere point %d read %f,%f,%f\n", n, px, py, pz);
 	}
@@ -924,7 +931,7 @@ void read_program_source(char** programSourcePtr, const char* programName)
 int error_check(cl_int err, char* clFunc, int print)
 {
 	if(err != CL_SUCCESS) {
-		printf("Call to %s failed (%d):\n", clFunc, err);
+		printf("Call to %s >> FAILED << (%d):\n", clFunc, err);
 
 		switch((int)err)
 		{

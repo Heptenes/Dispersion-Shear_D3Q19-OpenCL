@@ -9,21 +9,20 @@ __kernel void particle_particle_forces(
 	__global float4* parForce,
 	__global zone_struct* zoneDat,
 	__global int* parsZone,
-	__global int* parInThread,
+	__global int* threadMembers,
 	__global uint* numParInThread,
-	__global int* parInZone,
+	__global int* zoneMembers,
 	__global uint* numParInZone)
 {
-	int thrID = get_global_id(0);
-	int np = intDat->NumParticles;
+	int threadID = get_global_id(0);
 	
-	for(uint i = 0; i < numParInThread[thrID]; i++)
+	for(uint i = 0; i < numParInThread[threadID]; i++)
 	{		
 		// Detect collisions
-		int pi = parInThread[i];
+		int pi = threadMembers[threadID*intDat->NumParticles + i];
 		
 		int pZone = parsZone[pi];
-		float4 ppForce = (float4){0.0, 0.0, 0.0, 0.0};
+		//printf("zoneDat[pZone].NumNeighbors = %d\n", zoneDat[pZone].NumNeighbors);
 		
 		// Loop over neighbour zones (which should include this particles zone as well)
 		for (int i_nz = 0; i_nz < zoneDat[pZone].NumNeighbors; i_nz++) {
@@ -32,19 +31,21 @@ __kernel void particle_particle_forces(
 			
 			for (int j = 0; j < numParInZone[zoneID]; j++) {
 				
-				int pj = parInZone[j];
+				int pj = zoneMembers[zoneID*intDat->NumParticles + j];
 				
 				if (pi > pj) {
+					//printf("Testing for collision between particles %d and %d\n", pi, pj);
 					// Distance
-					
 					float4 rij = parKin[pj] - parKin[pi];
 					float rSep = length(rij);
 					float4 eij = rij/rSep; // Normalized vector pointing from i to j
 					
-					float overlap = rSep - flpDat->ParticleDiam;
+					//printf("rij, |r| = (%f,%f,%f) %f\n", rij.x, rij.y, rij.z, rSep);
 					
-					if (intDat->ParForceModel == PAR_COL_HARMONIC) { // Harmonic
-						float fMag = flpDat->ParForceParams[0]*overlap*overlap;
+					float overlap = rSep - flpDat->ParticleDiam; 
+					
+					if (intDat->ParForceModel == PAR_COL_HARMONIC) { // Harmonic f = k.x
+						float fMag = flpDat->ParForceParams[0]*overlap;
 						
 						// Update forces (no torque contribution)
 						parForce[pi] -= eij*fMag; 
@@ -65,23 +66,26 @@ __kernel void particle_dynamics(
 	__global float4* parFluidForce,
 	__global zone_struct* zoneDat,
 	__global int* parsZone,
-	__global int* parInThread,
+	__global int* threadMembers,
 	__global uint* numParInThread)
 {
-	int thrID = get_global_id(0);
+	int threadID = get_global_id(0);
 	int np = intDat->NumParticles;
+	int nfa = intDat->NumForceArrays;
 	
-	for(uint i = 0; i < numParInThread[thrID]; ++i)
+	for(uint i = 0; i < numParInThread[threadID]; ++i)
 	{
-		int p = parInThread[i];
+		int p = threadMembers[i];
 		
 		float4 accel = (float4){0.0f, 0.0f, 0.0f, 0.0f};
 		float4 angAccel = (float4){0.0f, 0.0f, 0.0f, 0.0f};
 		
 		// Sum fluid-particle forces
-		for (int fa = 0; fa < intDat->NumForceArrays; fa++) {
-			accel += parFluidForce[p + np*2*fa];
-			angAccel += parFluidForce[p + np*(2*fa+1)];
+		for (int fa = 0; fa < nfa; fa++) {
+			accel += parFluidForce[p*nfa + fa]; // Force
+			printf("force = %f %f %f\n", accel.x, accel.y, accel.z);
+			angAccel += parFluidForce[(p+np)*nfa + fa]; // Torque
+			printf("torque = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
 		}
 		
 		// Add particle-particle force
@@ -93,10 +97,14 @@ __kernel void particle_dynamics(
 				
 		// Update position (2nd order)
 		// x_t+1  =  x_t      +  v_t*dt        + 0.5*acc*dt^2
+		printf("Old position: %f %f %f\n", parKin[p].x, parKin[p].y, parKin[p].z);
 		parKin[p] = parKin[p] + parKin[p + np] + 0.5f*accel;
+		printf("New position: %f %f %f\n", parKin[p].x, parKin[p].y, parKin[p].z);
 		
 		// Update velocity
+		//printf("Old velocity: %f %f %f\n", parKin[p+np].x, parKin[p+np].y, parKin[p+np].z);
 		parKin[p + np] = parKin[p + np] + accel;
+		//printf("New velocity: %f %f %f\n\n", parKin[p+np].x, parKin[p+np].y, parKin[p+np].z);
 		
 		// Update rotation quaternion
 		// dq/dt = (1/2)*[angVel, 0]*q where [angVel, 0] and q are quaternions
@@ -111,7 +119,6 @@ __kernel void particle_dynamics(
 		
 		// Update angular velocity, dOmega = dt*T/I
 		parKin[p + 3*np] = av + angAccel;
-		
 	}
 }
 
@@ -121,20 +128,21 @@ __kernel void update_particle_zones(
 	__global flp_param_struct* flpDat,
 	__global float4* parKin,
 	__global zone_struct* zoneDat,
-	__global int* parInThread,
+	__global int* threadMembers,
 	__global uint* numParInThread,
 	__global int* parsZone,
-	__global int* parInZone,
+	__global int* zoneMembers,
 	__global uint* numParInZone)
 {
-	int thrID = get_global_id(0);
+	int threadID = get_global_id(0);
 	
-	printf("Thread ID %d", thrID);
+	//printf("update_particle_zones: Thread ID %d,", threadID);
+	//printf(" num par in thread = %d\n", numParInThread[threadID]);
 	
 	// Loop over particles for this thread
-	for(uint i = 0; i < numParInThread[thrID]; ++i)
+	for(uint i = 0; i < numParInThread[threadID]; ++i)
 	{
-		int p = parInThread[i];
+		int p = threadMembers[i + threadID*intDat->NumParticles];
 		
 		// Particles always belong to their initial thread
 		int zoneIDx = parKin[p].x/flpDat->ZoneWidth[0]; // Need to use more vector types
@@ -143,7 +151,9 @@ __kernel void update_particle_zones(
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
 		
 		parsZone[p] = zoneID;
-		parInZone[zoneID*intDat->NumParticles + numParInZone[zoneID]++] = p;
+		zoneMembers[zoneID*intDat->NumParticles + numParInZone[zoneID]++] = p;
+		
+		//printf("Particle %d now in zone %d\n", p, zoneID);
 	}
 	
 	// Add to zone, atomic increment particle counter (must be reset)

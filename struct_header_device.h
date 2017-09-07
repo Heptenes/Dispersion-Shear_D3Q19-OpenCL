@@ -46,8 +46,11 @@ typedef struct {
 	// Particle
 	float ParticleDiam;
 	float ParticleMass;
+	float PointArea;
 	float ParticleMomInertia;
 	float ParForceParams[2];
+	
+	float DirectForcingCoeff;
 
 } flp_param_struct;
 
