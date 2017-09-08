@@ -1,6 +1,6 @@
 #include "D3Q19-OpenCL_header.h"
 
-#include "main.c"
+#include "sim_main.c"
 
 // Function to set up data arrays and read input file
 int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_param_struct* hostDat)
@@ -49,7 +49,9 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"surf_point_write_atomic", TYPE_INT, &(intDat->MaxSurfPointsPerNode), "8"},
 		{"ibm_interpolation_mode", TYPE_INT, &(hostDat->InterpOrderIBM), "1"},
 		{"direct_forcing_coeff", TYPE_FLOAT, &(flpDat->DirectForcingCoeff), "1.0"},
-		{"rebuild_neigh_list_freq", TYPE_INT, &(intDat->RebuildFreq), "10"}
+		{"rebuild_neigh_list_freq", TYPE_INT, &(hostDat->RebuildFreq), "10"},
+		{"ovito_xyz_video_freq", TYPE_INT, &(hostDat->VideoFreq), "100"},
+		{"fluid_ouput_spacing", TYPE_INT, &(hostDat->VideoFreq), "1"}
 	};
 
 	int inputDefaultSize = sizeof(inputDefaults)/sizeof(inputDefaults[0]);
@@ -84,11 +86,11 @@ int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_
 {
 	int NumNodes = intDat->LatticeSize[0]*intDat->LatticeSize[1]*intDat->LatticeSize[2];
 	printf("Total number of nodes: %d\n", NumNodes);
-	
+
 	printf("Particle domain decomposition: %dx%dx%d\n", hostDat->DomainDecomp[0], hostDat->DomainDecomp[1], hostDat->DomainDecomp[2]);
-	
+
 	printf("Viscosity model %d\n", intDat->ViscosityModel);
-	
+
 	if ((intDat->BoundaryConds[0]+intDat->BoundaryConds[1]+intDat->BoundaryConds[2]) > 1) {
 		printf("Error: More than 1 pair of faces with velocity boundaries not yet supported.\n");
 		return 1;
@@ -147,41 +149,41 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 			u_h[i_n +   2*NumNodes] = 0.0f;
 		}
 	}
-	
+
 	// Other fields
 	for(int i_n=0; i_n<NumNodes; i_n++) {
-		
+
 		tau_p_h[i_n] = flpDat->NewtonianTau;
 		countPoint[i_n] = 0;
-		
+
 		for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
 			gpf_h[i_n + NumNodes*(3*p)    ] = 0.0f;
 			gpf_h[i_n + NumNodes*(3*p + 1)] = 0.0f;
 			gpf_h[i_n + NumNodes*(3*p + 2)] = 0.0f;
 		}
 	}
-	
+
 }
 
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float4* parKinematics, cl_float4* parForce, cl_float4** parFluidForce)
 {
 	printf("\nThere are %d particles.\n",intDat->NumParticles);
-	
+
 	flpDat->ParticleMass = (4.0f/3.0f)*M_PI*hostDat->ParticleDensity*pow(flpDat->ParticleDiam,3);
 	// 2*m*r^2/5;
 	flpDat->ParticleMomInertia = 0.1f*flpDat->ParticleMass*flpDat->ParticleDiam*flpDat->ParticleDiam;
 	printf("Mass = %f, moment of inertia = %f\n", flpDat->ParticleMass, flpDat->ParticleMomInertia);
-	
+
 	intDat->NumForceArrays = ceil((float)intDat->PointsPerParticle/(float)intDat->PointsPerWorkGroup);
-	
-	printf("\nNumber of particle force arrays needed = %d, (%d points, max %d per work group).\n\n", 
+
+	printf("\nNumber of particle force arrays needed = %d, (%d points, max %d per work group).\n\n",
 		intDat->NumForceArrays, intDat->PointsPerParticle, intDat->PointsPerWorkGroup);
-		
+
 	*parFluidForce = (cl_float4*)malloc(intDat->NumParticles*sizeof(cl_float4)*intDat->NumForceArrays*2);
-	
+
 	int np = intDat->NumParticles;
-	
+
 	// Decide initial positions
 	if (hostDat->InitialParticleDistribution == 1) {
 		// NxNxN lattice, for approx. cubic systems
@@ -219,13 +221,13 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		}
 	}
 	else if (hostDat->InitialParticleDistribution == 2){
-		// NxNxM Lattice 
+		// NxNxM Lattice
 		float pb = hostDat->ParticleBuffer;
 		float wM = intDat->LatticeSize[2]-pb-1;
 		float wN = intDat->LatticeSize[0]-pb-1;
-		
+
 		int mdn = ceil(wM/wN);
-	
+
 		int npl = 0, n = 0;
 		while(npl < np) {
 			n++;
@@ -233,7 +235,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		}
 		int m = n*mdn;
 		printf("Choosing a %d x %d x %d lattice, max %d particles.\n", n, n, m, npl);
-		
+
 		float sp[3]; // Spacing
 		if (np > 1) {
 				sp[0] = (intDat->LatticeSize[0]-2*intDat->BufferSize[0]-1 - 2*pb)/(n-1);
@@ -245,9 +247,9 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 				sp[i] = 0.0;
 			}
 		}
-		
+
 		printf("Lattice spacing = %f x %f x %f\n", sp[0], sp[1], sp[2]);
-		
+
 		for(int p = 0; p < np; p++) {
 			cl_float px = pb + sp[0]*(p/(n*m));
 			cl_float py = pb + sp[1]*((p/m)%n);
@@ -260,17 +262,17 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	else {
 		perror("Error: initial_particle_distribution option not a known value\n");
 	}
-	
+
 	// Angular quantities, forces and torque
 	for(int p = 0; p < np; p++) {
 		// Particle quaternion, last element is scalar part - easiest for use with float4 vectors
 		parKinematics[p + 2*np] = (cl_float4){0.0f, 0.0f, 0.0f, 1.0f};
 		// Angular velocity
 		parKinematics[p + 3*np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
-		
+
 		parForce[p     ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
 		parForce[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
-		
+
 		for (int fa = 0; fa < intDat->NumForceArrays; fa++) {
 			(*parFluidForce)[p + np*(2*fa)    ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Force
 			(*parFluidForce)[p + np*(2*fa + 1)] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Torque
@@ -296,69 +298,69 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	if (intDat->ViscosityModel != 0) {
 		printf("Warning: Estimate maybe inaccurate for forced flow of non-Newtonian fluids\n");
 	}
-	
+
 	// Compute neighbor zone width
 	float dMax = flpDat->ParticleDiam; // Monodisperse for now
 	float minZoneWidth = 2*(vMax*intDat->RebuildFreq) + dMax;
 	printf("\nMinimum particle neighbor zone width = %f\n", minZoneWidth);
-	
+
 	// Compute number of zones in each dimension
 	for (int i = 0; i < 3; i++) {
 		// Total size in i'th dimension
-		float w = (float)(intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1); 
+		float w = (float)(intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1);
 		intDat->NumZones[i] = floor(w/minZoneWidth) > 0 ? floor(w/minZoneWidth) : 1;
 		flpDat->ZoneWidth[i] = w/intDat->NumZones[i];
 		printf("Number of particle zones in dimension %d = %d\n", i, intDat->NumZones[i]);
 	}
 	printf("\nActual particle neighbor zone width = %f x %f x %f\n", flpDat->ZoneWidth[0], flpDat->ZoneWidth[1], flpDat->ZoneWidth[2]);
-	
+
 	// Assign particles to threads and zones
 	int numParThreads = hostDat->DomainDecomp[0]*hostDat->DomainDecomp[1]*hostDat->DomainDecomp[2];
 	int totalNumZones = intDat->NumZones[0]*intDat->NumZones[1]*intDat->NumZones[2];
 	*zoneDat = (zone_struct*)malloc(totalNumZones*sizeof(zone_struct));
-	
+
 	printf("Total number of zones = %d\n", totalNumZones);
-	
+
 	*zoneMembers = (cl_int*)malloc(totalNumZones*intDat->NumParticles*sizeof(cl_int));
 	*numParInZone = (cl_uint*)calloc(totalNumZones, sizeof(cl_uint));
-	
+
 	for (int p = 0; p < intDat->NumParticles; p++) {
-		
+
 		// Particles always belong to their initial thread
 		int thread = (int)(numParThreads*p)/intDat->NumParticles;
 		int np = numParInThread[thread]++;
 		threadMembers[thread*intDat->NumParticles + np] = p;
 		printf("Particle %d belongs to thread %d\n", p, thread);
 		printf("Thread %d now has %d particles.\n", thread, np+1);
-		
+
 		printf("Particle %d has position ", p);
 		printf("%f %f %f\n", parKinematics[p].x, parKinematics[p].y, parKinematics[p].z);
-		
+
 		int zoneIDx = parKinematics[p].x/flpDat->ZoneWidth[0];
 		int zoneIDy = parKinematics[p].y/flpDat->ZoneWidth[1];
 		int zoneIDz = parKinematics[p].z/flpDat->ZoneWidth[2];
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
-		
+
 		parsZone[p] = zoneID;
 		(*zoneMembers)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
 		//
-		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID], 
+		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID],
 			zoneID, zoneIDx, zoneIDy, zoneIDz);
-		
+
 	}
-	
+
 	// Loop over zones and add neighbors (x on inner loop to match GPU arrays)
 	for (int k = 0; k < intDat->NumZones[2]; k++) {
 		//
 		for (int j = 0; j < intDat->NumZones[1]; j++) {
 			//
 			for (int i = 0; i < intDat->NumZones[0]; i++) {
-				
+
 				int zoneID = i + intDat->NumZones[0]*(j + intDat->NumZones[2]*k);
 				(*zoneDat)[zoneID].NumNeighbors = 0;
-				
-				int lm = -1; int lp = 1; int mm = -1; int mp = 1; int nm = -1; int np = 1; 
-				
+
+				int lm = -1; int lp = 1; int mm = -1; int mp = 1; int nm = -1; int np = 1;
+
 				// Consider type 1 velocity BCs to be non-periodic, so don't add zones in that direction
 				if (intDat->BoundaryConds[0] == 1 && i == 0) {lm = 0;}
 				if (intDat->BoundaryConds[1] == 1 && j == 0) {mm = 0;}
@@ -366,32 +368,32 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 				if (intDat->BoundaryConds[0] == 1 && i == intDat->NumZones[0]-1) {lp = 0;}
 				if (intDat->BoundaryConds[1] == 1 && j == intDat->NumZones[1]-1) {mp = 0;}
 				if (intDat->BoundaryConds[2] == 1 && k == intDat->NumZones[2]-1) {np = 0;}
-				
+
 				for (int n = nm; n <= np; n++) {
 					//
 					for (int m = mm; m <= mp; m++) {
 						//
 						for (int l = lm; l <= lp; l++) {
-							
+
 							// Shifted to neighbor location
 							int ls = i+l; int ms = j+m; int ns = k+n;
-							
+
 							// Wrapped around boundaries
 							int lw = ls < 0 ? intDat->NumZones[0]-1 : ls%intDat->NumZones[0];
 							int mw = ms < 0 ? intDat->NumZones[1]-1 : ms%intDat->NumZones[1];
 							int nw = ns < 0 ? intDat->NumZones[2]-1 : ns%intDat->NumZones[2];
-								
+
 							int neighID = lw + intDat->NumZones[0]*(mw + intDat->NumZones[2]*(nw));
-							
+
 							//printf("Zone %d (%d,%d,%d) has neighbor %d (%d,%d,%d)\n", zoneID,i,j,k, neighID,lw,mw,nw);
-							int numNeighs = (*zoneDat)[zoneID].NumNeighbors++;							
+							int numNeighs = (*zoneDat)[zoneID].NumNeighbors++;
 							(*zoneDat)[zoneID].NeighborZones[numNeighs] = neighID;
 						}
 					}
 				}
-			}	
-		}	
-	}	
+			}
+		}
+	}
 }
 
 int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices)
@@ -415,7 +417,7 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 
 	clBuildProgram(programGPU, 1, &devices[1], NULL, NULL, &error);
 	error_check(error, "clBuildProgram GPU", 1);
-	
+
 	// CPU
 	programCPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceCPU,
 		NULL, &error);
@@ -437,20 +439,20 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 	kernelDat->boundary_periodic = clCreateKernel(programGPU, "boundary_periodic", &error);
 	if (!error_check(error, "clCreateKernel boundary_periodic", 1))
 		print_program_build_log(&programGPU, &devices[1]);
-	
+
 	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(programGPU, "particle_fluid_forces_linear_stencil", &error);
 	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
 		print_program_build_log(&programGPU, &devices[1]);
-	
+
 	// CPU
 	kernelDat->particle_dynamics = clCreateKernel(programCPU, "particle_dynamics", &error);
 	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
 		print_program_build_log(&programCPU, &devices[0]);
-		
+
 	kernelDat->particle_particle_forces = clCreateKernel(programCPU, "particle_particle_forces", &error);
 	if (!error_check(error, "particle_particle_forces", 1))
 		print_program_build_log(&programCPU, &devices[0]);
-	
+
 	kernelDat->update_particle_zones = clCreateKernel(programCPU, "update_particle_zones", &error);
 	if (!error_check(error, "update_particle_zones", 1))
 		print_program_build_log(&programCPU, &devices[0]);
@@ -458,7 +460,7 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 	size_t actualWorkGrpSize;
 	clGetKernelWorkGroupInfo(kernelDat->particle_fluid_forces_linear_stencil, devices[1],
 		CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &actualWorkGrpSize, NULL);
-		
+
 	int tempSize = (cl_int)actualWorkGrpSize;
 	int power2 = ceil(log2(tempSize)-1E-6);
 	int workSize = 1;	// Integer exponentiation 2^power2
@@ -466,9 +468,9 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 		workSize *= 2;
 	}
 	printf("Max work group size of fluid-particle kernel = %d.\n", workSize);
-		
+
 	intDat->PointsPerWorkGroup = workSize > intDat->PointsPerParticle ? intDat->PointsPerParticle : workSize;
-	
+
 
 
 	clReleaseProgram(programCPU);
@@ -715,7 +717,7 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, 3*sizeof(size_t), &hostDat->WorkItemSizes, NULL);
 		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n", (unsigned long)hostDat->WorkItemSizes[0],
-			(unsigned long)hostDat->WorkItemSizes[1], (unsigned long)hostDat->WorkItemSizes[2]);		
+			(unsigned long)hostDat->WorkItemSizes[1], (unsigned long)hostDat->WorkItemSizes[2]);
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &hostDat->MaxWorkGroupSize, NULL);
 		printf("CL_DEVICE_MAX_WORK_GROUP_SIZE = %lu \n\n", (unsigned long)hostDat->MaxWorkGroupSize);
 	}

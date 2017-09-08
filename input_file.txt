@@ -1,4 +1,4 @@
-iterations                      5
+iterations                     10
 console_print_freq              1
 constant_body_force             0.0001 0.0 0.0
 newtonian_tau                   0.9
@@ -6,7 +6,7 @@ newtonian_tau                   0.9
 viscosity_model                 1
 viscosity_params                0.0005 0.01
 
-total_lattice_size              16 16 16 
+total_lattice_size              16 16 16
 initial_f                       constant
 initial_vel                     0.0 0.0 0.0
 boundary_conditions_xyz         0 0 1

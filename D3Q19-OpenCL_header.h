@@ -77,6 +77,9 @@ typedef struct {
 	float ParticleDensity;
 	size_t WorkItemSizes[3];
 	size_t MaxWorkGroupSize;
+	int RebuildFreq;
+	int VideoFreq;
+	int FluidOutputSpacing;
 
 } host_param_struct;
 

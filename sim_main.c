@@ -53,7 +53,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	if (paramErrors > 0) {
 		exit(EXIT_FAILURE);
 	}
-	
+
 	// Read sphere surface discretization points
 	cl_float4* spherePoints;
 	sphere_discretization(&intDat, &flpDat, &spherePoints);
@@ -97,7 +97,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	initialize_particle_fields(hostDat, &intDat, &flpDat, parKin, parForce, &parFluidForce);
 	initialize_particle_zones(hostDat, &intDat, &flpDat, parKin, parsZone, &zoneMembers, &numParInZone, threadMembers, numParInThread, &zoneDat);
 	size_t totalNumZones = intDat.NumZones[0]*intDat.NumZones[1]*intDat.NumZones[2];
-	
+
 	// Stream mapping for pbcs
 	cl_int* strMap;
 	cl_int numPeriodicNodes = create_periodic_stream_mapping(&intDat, &strMap);
@@ -188,7 +188,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	// --- FIXED KERNEL ARGS ---------------------------------------------------
 	size_t memSize = sizeof(cl_mem);
 	err_cl = CL_SUCCESS;
-	
+
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 2, memSize, &gpf_cl);
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 3, memSize, &u_cl);
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 4, memSize, &tau_p_cl);
@@ -306,15 +306,15 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		printf("Work size %lu %lu\n\n", (unsigned long)numSurfPoints, (unsigned long)pointWorkSize);
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.particle_fluid_forces_linear_stencil, 1,
 			NULL, &numSurfPoints, &pointWorkSize, 0, NULL, NULL);
-		printf("Checkpoint particle_fluid_forces\n");
+		printf("Checkpoint: particle_fluid_forces\n");
 
 		// Kernel: Particle-particle forces
 		clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
 			NULL, &numParThreads, NULL, 0, NULL, NULL);
-		printf("Checkpoint particle_particle_forces\n");
-			
+		printf("Checkpoint: particle_particle_forces\n");
+
 		// Rebuild neighbour lists every intDat.RebuildFreq
-		if (t%intDat.RebuildFreq == 0) {
+		if (t%hostDat->RebuildFreq == 0) {
 			for (int i = 0; i < totalNumZones; i++) {
 				// Count is reset here because zones don't belong to threads
 				// May impact performance if large num of zones
@@ -331,6 +331,15 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		// Update dynamic parameters, e.g shear boundaries
 
 		// Produce video output
+		if (t%hostDat->VideoFreq == 0) {
+			for (int i = 0; i < totalNumZones; i++) {
+				// Count is reset here because zones don't belong to threads
+				// May impact performance if large num of zones
+				numParInZone[i] = 0;
+			}
+			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
+				NULL, &numParThreads, NULL, 0, NULL, NULL);
+		}
 
 	}
 	printf("Checkpoint: end of simulation loop\n");
@@ -346,7 +355,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);
 	LIST_OF_KERNELS
 #undef X
-		
+
 #define X(memName) clReleaseMemObject(memName);
 	LIST_OF_CL_MEM
 #undef X

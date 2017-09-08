@@ -12,7 +12,68 @@ typedef float Real;
 #define USE_VARIABLE_BODY_FORCE
 #define MIN_TAU 0.505
 
-#include "struct_header_device.h"
+//#include "struct_header_device.h"
+
+#define PAR_COL_HARMONIC 1
+#define PAR_COL_LJ 2
+
+typedef struct {
+
+	int MaxIterations;
+
+	int BasisVel[19][3];
+	int LatticeSize[3];
+	int BufferSize[3];
+	int BoundaryConds[3];
+	int NumZones[3];
+
+	int MaintainShear;
+	int ViscosityModel;
+
+	int NumParticles;
+	int ParForceModel;
+
+	int MaxSurfPointsPerNode;
+	int InterpOrderIBM;
+
+	int PointsPerParticle;
+	int PointsPerWorkGroup;
+	int TotalSurfPoints;
+	int NumForceArrays;
+
+	int RebuildFreq;
+
+} int_param_struct;
+
+
+typedef struct {
+
+	// Fluid
+	float ConstBodyForce[3];
+	float EqWeights[19];
+	float VelUpper[3];
+	float VelLower[3];
+	// Viscosity
+	float NewtonianTau;
+	float ViscosityParams[4];
+
+	float ZoneWidth[3];
+
+	// Particle
+	float ParticleDiam;
+	float ParticleMass;
+	float PointArea;
+	float ParticleMomInertia;
+	float ParForceParams[2];
+
+	float DirectForcingCoeff;
+
+} flp_param_struct;
+
+typedef struct {
+	int NumNeighbors;
+	int NeighborZones[26];
+} zone_struct;
 
 void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y, float u_z);
 void stream_locations(int n_x, int n_y, int n_z, int i_x, int i_y, int i_z, int* ind);
@@ -33,23 +94,23 @@ __kernel void particle_fluid_forces_linear_stencil(
 {
 	int globalID = get_global_id(0); // 1D kernel execution
 	int globalSize = get_global_size(0);
-	
+
 	int localID = get_local_id(0);
 	int localSize = get_local_size(0);
-	
+
 	int groupID = get_group_id(0);
 	int numGroups = get_num_groups(0);
-	
+
 	//printf("globalID, globalSize  %d  %d\n", globalID, globalSize);
 	//printf("localID, localSize    %d  %d\n", localID, localSize);
 	//printf("groupID, numGroups    %d  %d\n", groupID, numGroups);
-	
+
 	int np = intDat->NumParticles;
-	
+
 	// Get particle ID for this node
 	int parID = globalID/intDat->PointsPerParticle; // Requires same number of nodes for each particle
 	int pointID = globalID%intDat->PointsPerParticle;
-	
+
 	//printf("parID, pointID %d  %d\n", parID, pointID);
 
 	// Get lattice size info, for reading and writing velocity and force
@@ -62,7 +123,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 	float4 xPar = parKin[parID]; // Position
 	float4 vPar = parKin[parID + np]; // Velocity
 	float4 angVel = parKin[parID + 3*np]; // Angular velocity
-	
+
 	//printf("point = %d, xp = %f %f %f (%f)\n", pointID, xp.x, xp.y, xp.z, xp.w);
 	//printf("point = %d, vp = %f %f %f (%f)\n", pointID, vp.x, vp.y, vp.z, vp.w);
 	//printf("point = %d, angVel = %f %f %f (%f)\n", pointID, angVel.x, angVel.y, angVel.z, angVel.w);
@@ -70,7 +131,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 	// Lookup original position of this point relative to particle center
 	float4 r_0 = spherePoints[pointID];
 	//printf("point = %d,r0 = %f %f %f (%f)\n", pointID, r0.x, r0.y, r0.z, r0.w);
-	
+
 	// Apply rotation matrix (shouldn't be needed for spherical particles)
 	//float4 r2 = (float4){0.0, 0.0, 0.0, 0.0};
 	//r2 = e1*r.x + e2*r.y + e3*r.z;
@@ -81,22 +142,22 @@ __kernel void particle_fluid_forces_linear_stencil(
 	// Adjust for periodic BCs (assume buffer of 1 unit for now)
 	float4 w = (float4)(N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f); // w is set to 1 to avoid nan when using fmod()
 	float4 r_pp = fmod(r_p,w);
-	
+
 	//printf("point = %d, r_p = %f %f %f (%f)\n", pointID, r_p.x, r_p.y, r_p.z, r_p.w);
 	//printf("point = %d, r_pp = %f %f %f (%f)\n", pointID, r_pp.x, r_pp.y, r_pp.z, r_pp.w);
 
-	// Location of corner closest to origin 
+	// Location of corner closest to origin
 	int x_i0 = (int)floor(r_pp.x) + intDat->BufferSize[0];
 	int y_i0 = (int)floor(r_pp.y) + intDat->BufferSize[1];
 	int z_i0 = (int)floor(r_pp.z) + intDat->BufferSize[2];
-	
+
 	//printf("point = %d, r_floor = %d %d %d\n", pointID, x_0, y_0, z_0);
-	
+
 	// Linear stencil interpolation weightings
 	int sten[8][3] = {{0,0,0}, {1,0,0}, {0,1,0}, {0,0,1}, {1,1,0}, {1,0,1}, {0,1,1}, {1,1,1}};
 	float weights[8];
 	float4 u_pp = (float4){0.0f, 0.0f, 0.0f, 0.0f};
-	
+
 	//float sumW = 0.0;
 	for(int n = 0; n < 8; n++) {
 		//
@@ -104,16 +165,16 @@ __kernel void particle_fluid_forces_linear_stencil(
 		int y_n = y_i0 + sten[n][1];
 		int z_n = z_i0 + sten[n][2];
 		int i_1D = x_n + N_x*(y_n + N_y*z_n);
-		
+
 		//                lattice buffer v
 		float wx = 1.0f - fabs(r_pp.x + 1.0f - (float)x_n);
 		float wy = 1.0f - fabs(r_pp.y + 1.0f - (float)y_n);
 		float wz = 1.0f - fabs(r_pp.z + 1.0f - (float)z_n);
 		//printf("x_n, shifted r_pp.x, wx: %d-%f, %f\n", x_n, r_pp.x + 1.0f, wx);
-		
+
 		weights[n] = wx*wy*wz;
 		//sumW += weights[n];
-		
+
 		// Interpolate velocity
 		u_pp.x += weights[n]*u[i_1D        ];
 		u_pp.y += weights[n]*u[i_1D +   N_C];
@@ -136,29 +197,29 @@ __kernel void particle_fluid_forces_linear_stencil(
 		int y_n = y_i0 + sten[n][1];
 		int z_n = z_i0 + sten[n][2];
 		int i_1D = x_n + N_x*(y_n + N_y*z_n);
-		
+
 		int writeCount = atomic_inc(countPoint+i_1D); // The p'th time a surface point writes to this node
 		int j = writeCount%intDat->MaxSurfPointsPerNode;
 		//printf("i_1D, writeCount, j, area = %d, %d, %d, %f\n", i_1D, writeCount, j, flpDat->PointArea);
-		
+
 		gpf[i_1D + N_C*(3*j)	] -= weights[n]*flpDat->PointArea*vuForce.x;
 		gpf[i_1D + N_C*(3*j + 1)] -= weights[n]*flpDat->PointArea*vuForce.y;
 		gpf[i_1D + N_C*(3*j + 2)] -= weights[n]*flpDat->PointArea*vuForce.z;
 	}
-	
+
 	parFluidForceSum[globalID] = vuForce;
 	parFluidForceSum[globalID + globalSize] = vuTorque;
-	
+
 	// Sum force and torque over all the threads in this work group
 	barrier(CLK_LOCAL_MEM_FENCE);
 
 	// Work group size must be power of 2
 	for(int i_s = localSize/2; i_s>0; i_s >>= 1) {
 		if(localID < i_s) {
-			
+
 			//printf("Sum reduction: %d += %d\n", globalID, globalID + i_s);
 			//printf("Sum reduction: %d += %d\n", globalID + globalSize, globalID + i_s + globalSize);
-			parFluidForceSum[globalID] += parFluidForceSum[globalID + i_s]; // Force 
+			parFluidForceSum[globalID] += parFluidForceSum[globalID + i_s]; // Force
 			parFluidForceSum[globalID + globalSize] += parFluidForceSum[globalID + i_s + globalSize]; // Torque
 		}
 		barrier(CLK_LOCAL_MEM_FENCE);
@@ -167,7 +228,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 	if(localID == 0) {
 		//printf("Sum return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID, globalID);
 		//printf("Sum return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
-		parFluidForce[groupID] = parFluidForceSum[globalID]; // Return summed force 
+		parFluidForce[groupID] = parFluidForceSum[globalID]; // Return summed force
 		parFluidForce[groupID + numGroups] = parFluidForceSum[globalID + globalSize]; // Summed torque
 	}
 }
@@ -184,7 +245,7 @@ __kernel void collideMRT_stream_D3Q19(
 	__global flp_param_struct* flpDat) // Params could be const or local if supported
 {
 	//printf(">> collideMRT_stream_D3Q19 <<");
-	
+
 	// Get 3D indices
 	int i_x = get_global_id(0); // Using global_work_offset to take buffer layer into account
 	int i_y = get_global_id(1);
@@ -220,12 +281,12 @@ __kernel void collideMRT_stream_D3Q19(
 		g_x += gpf[i_1D + N_C*(3*j)    ];
 		g_y += gpf[i_1D + N_C*(3*j + 1)];
 		g_z += gpf[i_1D + N_C*(3*j + 2)];
-		
+
 		gpf[i_1D + N_C*(3*j)    ] = 0.0f;
 		gpf[i_1D + N_C*(3*j + 1)] = 0.0f;
 		gpf[i_1D + N_C*(3*j + 2)] = 0.0f;
 	}
-	
+
 	countPointWrite[i_1D] = 0;
 
 #endif
@@ -299,26 +360,26 @@ __kernel void collideMRT_stream_D3Q19(
 	// Compute relaxation times
 	// [8], [9], [10], [14], [15] to be set to 1/tau
 	float s[19] = {0.0, 1.19f, 1.40f, 1.0f, 1.20f, 1.0f, 1.20f, 1.0f, 1.0f, 1.0f, 1.0f, 1.20f, 1.40f, 1.40f, 1.0f, 1.0f, 1.98f, 1.98f, 1.98f};
-	
+
 #ifdef USE_CONSTANT_VISCOSITY
 	float tau = flpDat->NewtonianTau;
 	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
 	s[14] = 1.0f/tau; s[15] = 1.0f/tau;
 #else
-	
+
 	// Compute local expression for shear rate tensor, using tau from previous time step
 	float tau = tau_p[i_1D];
-	
+
 	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
 	s[14] = 1.0f/tau; s[15] = 1.0f/tau;
-	
+
 	//printf("TAU prev = %f \n", tau);
-	
+
 	for(int i = 0; i < 19; i++) {
 		smn[i] = s[i]*mn[i]; // MRT relaxation
 		smg[i] = s[i]*mg[i]; // Relaxed part of guo term (non-relaxed part added later)
 	}
-	
+
 	// Convert back
 	msmn[0] = 5.2631579E-2f*smn[0] -1.2531328E-2f*smn[1] +4.7619048E-2f*smn[2];
 	msmn[1] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[3] -1.0E-1f*smn[4] +5.5555556E-2f*smn[9] -5.5555556E-2f*smn[10];
@@ -339,8 +400,8 @@ __kernel void collideMRT_stream_D3Q19(
 	msmn[16] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[5] +2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] +1.25E-1f*smn[17] +1.25E-1f*smn[18];
 	msmn[17] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +1.0E-1f*smn[7] +2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] -1.25E-1f*smn[17] -1.25E-1f*smn[18];
 	msmn[18] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] +2.5E-1f*smn[14] -1.25E-1f*smn[17] +1.25E-1f*smn[18];
-	
-	
+
+
 	// Convert back
 	msmg[0] = 5.2631579E-2f*smg[0] -1.2531328E-2f*smg[1] +4.7619048E-2f*smg[2];
 	msmg[1] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[3] -1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
@@ -361,12 +422,12 @@ __kernel void collideMRT_stream_D3Q19(
 	msmg[16] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] +1.0E-1f*smg[5] +2.5E-2f*smg[6] -1.0E-1f*smg[7] -2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] -2.5E-1f*smg[14] +1.25E-1f*smg[17] +1.25E-1f*smg[18];
 	msmg[17] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[5] -2.5E-2f*smg[6] +1.0E-1f*smg[7] +2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] -2.5E-1f*smg[14] -1.25E-1f*smg[17] -1.25E-1f*smg[18];
 	msmg[18] = 5.2631579E-2f*smg[0] +3.3416876E-3f*smg[1] +3.9682540E-3f*smg[2] -1.0E-1f*smg[5] -2.5E-2f*smg[6] -1.0E-1f*smg[7] -2.5E-2f*smg[8] -5.5555556E-2f*smg[9] -2.7777778E-2f*smg[10] +2.5E-1f*smg[14] -1.25E-1f*smg[17] +1.25E-1f*smg[18];
-	
+
 	float ssum[19];
 	for(int i = 0; i < 19; i++) {
 		ssum[i] = msmn[i] + fg[i] - 0.5f*msmg[i];
 	}
-	
+
 	// Shear rate tensor without prefactor, see Chai and Zhao, PRE 86, 016705 (2012)
 	float scc[3][3];
 
@@ -379,8 +440,8 @@ __kernel void collideMRT_stream_D3Q19(
 	scc[2][0] = scc[0][2];
 	scc[2][1] = scc[1][2];
 	scc[2][2] = ssum[5] +ssum[6] +ssum[9] +ssum[10] +ssum[13] +ssum[14] +ssum[15] +ssum[16] +ssum[17] +ssum[18];
-	
-	// -(uF + Fu) term	
+
+	// -(uF + Fu) term
 	scc[0][0] -= 2*u_x*g_x;
 	scc[0][1] -= (u_x*g_y + u_y*g_x);
 	scc[0][2] -= (u_x*g_z + u_z*g_x);
@@ -389,7 +450,7 @@ __kernel void collideMRT_stream_D3Q19(
 	scc[1][2] -= (u_y*g_z + u_z*g_y);
 	scc[2][0] -= (u_z*g_x + u_x*g_z);
 	scc[2][1] -= (u_z*g_y + u_y*g_z);
-	scc[2][2] -= 2*u_z*g_z; 
+	scc[2][2] -= 2*u_z*g_z;
 
 	//float traceTerm = n[1] +n[2] +n[3] +n[4] +n[5] +n[6] +2.0f*n[7] +2.0f*n[8] +2.0f*n[9] +2.0f*n[10] +2.0f*n[11] +2.0f*n[12] +2.0f*n[13] +2.0f*n[14] +2.0f*n[15] +2.0f*n[16] +2.0f*n[17] +2.0f*n[18];
 	//scc[0][0] -= traceTerm/3.0f;
@@ -416,12 +477,12 @@ __kernel void collideMRT_stream_D3Q19(
 	// Recalcualate s
 	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
 	s[14] = 1.0f/tau; s[15] = 1.0f/tau;
-	
+
 	for(int i = 0; i < 19; i++) {
 		smn[i] = s[i]*mn[i]; // MRT relaxation
 		smg[i] = s[i]*mg[i]; // Relaxed part of guo term (non-relaxed part added later)
 	}
-	
+
 	// Convert back
 	msmn[0] = 5.2631579E-2f*smn[0] -1.2531328E-2f*smn[1] +4.7619048E-2f*smn[2];
 	msmn[1] = 5.2631579E-2f*smn[0] -4.5948204E-3f*smn[1] -1.5873016E-2f*smn[2] +1.0E-1f*smn[3] -1.0E-1f*smn[4] +5.5555556E-2f*smn[9] -5.5555556E-2f*smn[10];
@@ -442,7 +503,7 @@ __kernel void collideMRT_stream_D3Q19(
 	msmn[16] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] +1.0E-1f*smn[5] +2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] +1.25E-1f*smn[17] +1.25E-1f*smn[18];
 	msmn[17] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] +1.0E-1f*smn[7] +2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] -2.5E-1f*smn[14] -1.25E-1f*smn[17] -1.25E-1f*smn[18];
 	msmn[18] = 5.2631579E-2f*smn[0] +3.3416876E-3f*smn[1] +3.9682540E-3f*smn[2] -1.0E-1f*smn[5] -2.5E-2f*smn[6] -1.0E-1f*smn[7] -2.5E-2f*smn[8] -5.5555556E-2f*smn[9] -2.7777778E-2f*smn[10] +2.5E-1f*smn[14] -1.25E-1f*smn[17] +1.25E-1f*smn[18];
-	
+
 	msmg[0] = 5.2631579E-2f*smg[0] -1.2531328E-2f*smg[1] +4.7619048E-2f*smg[2];
 	msmg[1] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] +1.0E-1f*smg[3] -1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
 	msmg[2] = 5.2631579E-2f*smg[0] -4.5948204E-3f*smg[1] -1.5873016E-2f*smg[2] -1.0E-1f*smg[3] +1.0E-1f*smg[4] +5.5555556E-2f*smg[9] -5.5555556E-2f*smg[10];
@@ -590,7 +651,7 @@ __kernel void boundary_velocity(
 	__global flp_param_struct* flpDat,
 	int wallAxis) // Could try adding this argument to intDat
 {
-	
+
 	// Get 3D indices
 	int i_3[3]; // Needs to be an array
 	i_3[0] = get_global_id(0); // Using global_work_offset = {1,1,1}
@@ -864,13 +925,13 @@ float compute_tau(float srtII, __global float* nonNewtonianParams)
 	float sigma_y = nonNewtonianParams[0];
 	float eta_inf = nonNewtonianParams[1];
 	float m_c = 1E6;
-	
+
 	//printf("sigma_y = %f\n", sigma_y);
 	//printf("eta_inf = %f\n", eta_inf);
-	
+
 	float a_c = (sqrt(eta_inf) + (1-exp(-sqrt(m_c*srtII)))*sqrt(sigma_y/srtII));
 	float tau = 3.0f*a_c*a_c + 0.5f;
-	
+
 	//float nu = (sqrt(sigma_y/srtII) + sqrt(eta_inf))*(sqrt(sigma_y/srtII) + sqrt(eta_inf));
 	//float tau = 3.0f*nu + 0.5f;
 
@@ -880,32 +941,32 @@ float compute_tau(float srtII, __global float* nonNewtonianParams)
 	}
 	//tau = tau > 100.0 ? 100.0 : tau;
 	//printf("Casson tau = %f\n", tau);
-	
+
 	return tau;
 }
 
 #elif POWER LAW
 float compute_tau(float srtII, __global float* nonNewtonianParams)
-{	
+{
 	float k = 0.001;
 	//float n = 0.5;
-	
+
 	float nu = k/sqrt(srtII);
 	float tau = 3.0f*nu + 0.5f;
-	
+
 	//tau = tau > 100.0 ? 100.0 : tau;
 	if (tau < MIN_TAU) {
 		tau = MIN_TAU;
 		printf("Warning: tau <= %f\n", tau);
 	}
 	//printf("Power law tau = %f\n", tau);
-	
+
 	return tau;
 }
 
 #else
 float compute_tau(float srtII, __global float* nonNewtonianParams)
-{	
+{
 	return 1.0;
 }
 #endif
