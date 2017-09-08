@@ -24,8 +24,6 @@ typedef struct {
 	cl_int PointsPerWorkGroup;
 	cl_int TotalSurfPoints;
 	cl_int NumForceArrays;
-	
-	cl_int RebuildFreq;
 
 } int_param_struct;
 

@@ -213,8 +213,15 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clSetKernelArg(kernelDat.particle_fluid_forces_linear_stencil, 6, memSize, &parFluidForceSum_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_fluid_forces_linear_stencil, 7, memSize, &spherePoints_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_fluid_forces_linear_stencil, 8, memSize, &countPoint_cl);
+			
+	err_cl |= clSetKernelArg(kernelDat.sum_particle_fluid_forces, 0, memSize, &intDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.sum_particle_fluid_forces, 1, memSize, &flpDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.sum_particle_fluid_forces, 2, memSize, &gpf_cl);
+	
+	err_cl |= clSetKernelArg(kernelDat.reset_particle_fluid_forces, 0, memSize, &intDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.reset_particle_fluid_forces, 1, memSize, &flpDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.reset_particle_fluid_forces, 2, memSize, &gpf_cl);
 
-	// Try looping over array of cl_mem* to make this shorter
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 0, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 1, memSize, &flpDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 2, memSize, &parKin_cl);
@@ -251,6 +258,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	// ---------------------------------------------------------------------------------
 	// --- MAIN LOOP -------------------------------------------------------------------
 	// ---------------------------------------------------------------------------------
+	FILE* vidPtr;
+	vidPtr = fopen ("xyz_ovito_output.txt","w");
 	printf("%s %d\n", "Starting iteration 1, maximum iterations", intDat.MaxIterations);
 	for (int t=1; t<=intDat.MaxIterations; t++) {
 
@@ -262,14 +271,14 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		// Switch f buffers
 		if (t%2 == 0) {
-			err_cl	 = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fA_cl);
+			err_cl  = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fA_cl);
 			err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 1, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fB_cl);
 			//error_check(err_cl, "clSetKernelArg", 1);
 		}
 		else {
-			err_cl	 = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fB_cl);
+			err_cl  = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 1, memSize, &fA_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fA_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fA_cl);
@@ -281,10 +290,13 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
 		// Kernel: Particle update
-		clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
-			NULL, &numParThreads, NULL, 0, NULL, NULL);
+		//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
+		//	NULL, &numParThreads, NULL, 0, NULL, NULL);
 
 		clFinish(*GPU_QueuePtr);
+		
+		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.reset_particle_fluid_forces, 3,
+			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
 		// Kernel: Periodic stream
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_periodic, 1,
@@ -303,15 +315,18 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		// Need to write updated particle kinematics to GPU if not using host pointer
 
 		// Kernel: Particle-fluid forces
-		printf("Work size %lu %lu\n\n", (unsigned long)numSurfPoints, (unsigned long)pointWorkSize);
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.particle_fluid_forces_linear_stencil, 1,
 			NULL, &numSurfPoints, &pointWorkSize, 0, NULL, NULL);
-		printf("Checkpoint: particle_fluid_forces\n");
-
+		//printf("Checkpoint: particle_fluid_forces\n");
+			
+		clFinish(*CPU_QueuePtr);
+		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.sum_particle_fluid_forces, 3,
+			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+			
 		// Kernel: Particle-particle forces
-		clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
-			NULL, &numParThreads, NULL, 0, NULL, NULL);
-		printf("Checkpoint: particle_particle_forces\n");
+		//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
+		//	NULL, &numParThreads, NULL, 0, NULL, NULL);
+		//printf("Checkpoint: particle_particle_forces\n");
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
 		if (t%hostDat->RebuildFreq == 0) {
@@ -320,10 +335,10 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 				// May impact performance if large num of zones
 				numParInZone[i] = 0;
 			}
-			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
-				NULL, &numParThreads, NULL, 0, NULL, NULL);
+			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
+			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
-		printf("Checkpoint: update_particle_zones\n");
+		//printf("Checkpoint: update_particle_zones\n");
 
 		clFinish(*GPU_QueuePtr); // So forces are updated
 		clFinish(*CPU_QueuePtr);
@@ -332,13 +347,10 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		// Produce video output
 		if (t%hostDat->VideoFreq == 0) {
-			for (int i = 0; i < totalNumZones; i++) {
-				// Count is reset here because zones don't belong to threads
-				// May impact performance if large num of zones
-				numParInZone[i] = 0;
-			}
-			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
-				NULL, &numParThreads, NULL, 0, NULL, NULL);
+			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
+			error_check(err_cl, "clEnqueueReadBuffer Video", 1);
+			
+			continuous_output(hostDat, &intDat, u_h, parKin, vidPtr, t);
 		}
 
 	}
@@ -349,7 +361,9 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 	error_check(err_cl, "clEnqueueReadBuffer", 1);
 
-	//write_lattice_field(u_h, &intDat);
+	write_lattice_field(u_h, &intDat);
+	
+	printf("Final force on particle 1 = %f %f %f\n", parFluidForce[0].x, parFluidForce[0].y, parFluidForce[0].z);
 
 	// Cleanup
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);

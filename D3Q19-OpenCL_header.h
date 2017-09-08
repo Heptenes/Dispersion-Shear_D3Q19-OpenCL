@@ -35,6 +35,8 @@
 	X(particle_dynamics) \
 	X(particle_particle_forces) \
 	X(particle_fluid_forces_linear_stencil) \
+	X(sum_particle_fluid_forces) \
+	X(reset_particle_fluid_forces) \
 	X(update_particle_zones)
 
 
@@ -132,6 +134,8 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr);
 
 int write_lattice_field(cl_float* u_h, int_param_struct* intDat);
+
+void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame);
 
 int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices);
 

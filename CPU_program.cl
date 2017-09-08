@@ -132,6 +132,11 @@ __kernel void particle_dynamics(
 	int threadID = get_global_id(0);
 	int np = intDat->NumParticles;
 	int nfa = intDat->NumForceArrays;
+	
+	int N_x = intDat->LatticeSize[0];
+	int N_y = intDat->LatticeSize[1];
+	int N_z = intDat->LatticeSize[2];
+	float4 w = (float4)(N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f); // w is set to 1 to avoid nan when using fmod()
 
 	for(uint i = 0; i < numParInThread[threadID]; ++i)
 	{
@@ -143,28 +148,39 @@ __kernel void particle_dynamics(
 		// Sum fluid-particle forces
 		for (int fa = 0; fa < nfa; fa++) {
 			accel += parFluidForce[p*nfa + fa]; // Force
-			printf("force = %f %f %f\n", accel.x, accel.y, accel.z);
+			printf("Fluid-particle force    =  %f %f %f\n", accel.x, accel.y, accel.z);
 			angAccel += parFluidForce[(p+np)*nfa + fa]; // Torque
-			printf("torque = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
+			printf("Fluid-particle torque   = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
 		}
 
 		// Add particle-particle force
 		accel += parForce[p];
 		angAccel += parForce[p + np];
+		printf("Particle-particle force = %f %f %f\n", parForce[p].x, parForce[p].y, parForce[p].z);
 
 		accel /= flpDat->ParticleMass;
 		angAccel /= flpDat->ParticleMomInertia; // Spheres
-
+		
+		// Add constant acceleration
+		accel.x += flpDat->ConstBodyForce[0]; // Need to move to vector implementation
+		accel.y += flpDat->ConstBodyForce[1];
+		accel.z += flpDat->ConstBodyForce[2];
+		printf("Total acceleration      =   %f %f %f\n", accel.x, accel.y, accel.z);
+		
+		
 		// Update position (2nd order)
 		// x_t+1  =  x_t      +  v_t*dt        + 0.5*acc*dt^2
 		printf("Old position: %f %f %f\n", parKin[p].x, parKin[p].y, parKin[p].z);
-		parKin[p] = parKin[p] + parKin[p + np] + 0.5f*accel;
+		float4 rTemp = parKin[p] + parKin[p + np] + 0.5f*accel;
+		//parKin[p]  = fmod(rTemp,w);
 		printf("New position: %f %f %f\n", parKin[p].x, parKin[p].y, parKin[p].z);
-
+		
+		
 		// Update velocity
-		//printf("Old velocity: %f %f %f\n", parKin[p+np].x, parKin[p+np].y, parKin[p+np].z);
-		parKin[p + np] = parKin[p + np] + accel;
-		//printf("New velocity: %f %f %f\n\n", parKin[p+np].x, parKin[p+np].y, parKin[p+np].z);
+		printf("Old velocity: %f %f %f\n", parKin[p+np].x, parKin[p+np].y, parKin[p+np].z);
+		//parKin[p + np] = parKin[p + np] + accel;
+		printf("New velocity: %f %f %f\n\n", parKin[p+np].x, parKin[p+np].y, parKin[p+np].z);
+		
 
 		// Update rotation quaternion
 		// dq/dt = (1/2)*[angVel, 0]*q where [angVel, 0] and q are quaternions
@@ -178,7 +194,9 @@ __kernel void particle_dynamics(
 		parKin[p + 2*np].w += 0.5f*dq_w;
 
 		// Update angular velocity, dOmega = dt*T/I
-		parKin[p + 3*np] = av + angAccel;
+		printf("Old ang. vel: %f %f %f\n", av.x, av.y, av.z);
+		//parKin[p + 3*np] = av + angAccel;
+		printf("New ang. vel: %f %f %f\n", parKin[p+3*np].x, parKin[p+3*np].y, parKin[p+3*np].z);
 	}
 }
 

@@ -51,7 +51,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"direct_forcing_coeff", TYPE_FLOAT, &(flpDat->DirectForcingCoeff), "1.0"},
 		{"rebuild_neigh_list_freq", TYPE_INT, &(hostDat->RebuildFreq), "10"},
 		{"ovito_xyz_video_freq", TYPE_INT, &(hostDat->VideoFreq), "100"},
-		{"fluid_ouput_spacing", TYPE_INT, &(hostDat->VideoFreq), "1"}
+		{"fluid_ouput_spacing", TYPE_INT, &(hostDat->FluidOutputSpacing), "1"}
 	};
 
 	int inputDefaultSize = sizeof(inputDefaults)/sizeof(inputDefaults[0]);
@@ -301,7 +301,7 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 
 	// Compute neighbor zone width
 	float dMax = flpDat->ParticleDiam; // Monodisperse for now
-	float minZoneWidth = 2*(vMax*intDat->RebuildFreq) + dMax;
+	float minZoneWidth = 2*(vMax*hostDat->RebuildFreq) + dMax;
 	printf("\nMinimum particle neighbor zone width = %f\n", minZoneWidth);
 
 	// Compute number of zones in each dimension
@@ -442,6 +442,14 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 
 	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(programGPU, "particle_fluid_forces_linear_stencil", &error);
 	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
+		print_program_build_log(&programGPU, &devices[1]);
+	
+	kernelDat->sum_particle_fluid_forces = clCreateKernel(programGPU, "sum_particle_fluid_forces", &error);
+	if (!error_check(error, "sum_particle_fluid_forces", 1))
+		print_program_build_log(&programGPU, &devices[1]);
+	
+	kernelDat->reset_particle_fluid_forces = clCreateKernel(programGPU, "reset_particle_fluid_forces", &error);
+	if (!error_check(error, "reset_particle_fluid_forces", 1))
 		print_program_build_log(&programGPU, &devices[1]);
 
 	// CPU
@@ -587,6 +595,40 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 	return 0;
 }
 
+
+void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame)
+{
+	// Write fluid
+	int n_x = intDat->LatticeSize[0];
+	int n_y = intDat->LatticeSize[1];
+	int n_z = intDat->LatticeSize[2];
+	float n_s = hostDat->FluidOutputSpacing; // for float division
+	int n_L = n_x*n_y*n_z;
+	
+	int n_print = ceil(n_x/n_s)*ceil(n_y/n_s)*ceil(n_z/n_s);
+	
+	fprintf(vidPtr, "%d\n", n_print);
+	fprintf(vidPtr, "D3Q19_output, frame %d\n", frame);
+
+	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x += n_s) {
+		for(int i_y=1; i_y < intDat->LatticeSize[1]-1; i_y += n_s) {
+			for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z += n_s) {
+
+				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
+
+				// Index, then velocity
+				fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
+				fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
+
+			}
+		}
+	}
+	
+	
+	// Write particles
+	
+}
+
 int write_lattice_field(cl_float* field, int_param_struct* intDat)
 {
 	FILE* fPtr;
@@ -607,6 +649,26 @@ int write_lattice_field(cl_float* field, int_param_struct* intDat)
 			}
 		}
 	}
+	fclose(fPtr);
+	
+	FILE* fPtr2;
+	fPtr2 = fopen ("matlab_postproc/velocity_field_centerline.txt","w");
+	
+	int i_y = floor((float)intDat->LatticeSize[1]/2.0f); 
+
+	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x++) {
+		for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z++) {
+
+			int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
+
+			// Index, then velocity
+			fprintf(fPtr2, "%d %d %d ", i_x, i_y, i_z);
+			fprintf(fPtr2, "%9.7f %9.7f %9.7f\n", field[i_1D],  field[i_1D + n_C],  field[i_1D + 2*n_C]);
+
+		}
+	}
+	fclose(fPtr2);
+	
 	return 0;
 }
 
