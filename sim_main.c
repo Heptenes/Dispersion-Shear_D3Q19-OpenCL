@@ -320,7 +320,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			NULL, &numSurfPoints, &pointWorkSize, 0, NULL, NULL);
 		//printf("Checkpoint: particle_fluid_forces\n");
 			
-		clFinish(*CPU_QueuePtr);
+		clFinish(*GPU_QueuePtr);
 		
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.sum_particle_fluid_forces, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);

@@ -1,11 +1,11 @@
 
 #pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
 
-//#define USE_CONSTANT_VISCOSITY
+#define USE_CONSTANT_VISCOSITY
 #define USE_VARIABLE_BODY_FORCE
 #define MIN_TAU 0.505
 #define VEL_BC_RHO
-#define CASSON
+//#define CASSON
 
 //#include "struct_header_device.h"
 
