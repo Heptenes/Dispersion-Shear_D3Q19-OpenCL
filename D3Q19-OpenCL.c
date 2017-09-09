@@ -507,6 +507,7 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 	intDat->PointsPerParticle = numPoints;
 	intDat->TotalSurfPoints = numPoints*intDat->NumParticles;
 	flpDat->PointArea = area/(float)numPoints;
+	printf("Surface area per point = %f.\n", flpDat->PointArea);
 
 	// Take discretization with num nodes > surface area in lattice units
 	char sphereFilename[128];

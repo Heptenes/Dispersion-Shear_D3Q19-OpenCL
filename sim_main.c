@@ -295,6 +295,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		clFinish(*GPU_QueuePtr);
 		
+		// Kernel: Reset particle-fluid force array
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.reset_particle_fluid_forces, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
@@ -320,6 +321,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		//printf("Checkpoint: particle_fluid_forces\n");
 			
 		clFinish(*CPU_QueuePtr);
+		
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.sum_particle_fluid_forces, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 			

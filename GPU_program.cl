@@ -4,6 +4,7 @@
 #define USE_CONSTANT_VISCOSITY
 #define USE_VARIABLE_BODY_FORCE
 #define MIN_TAU 0.505
+#define VEL_BC_RHO
 
 //#include "struct_header_device.h"
 
@@ -178,8 +179,8 @@ __kernel void particle_fluid_forces_linear_stencil(
 	// Calculate velocity of node
 	float4 v_pp = vPar + cross(angVel,r_pp); // Order is important
 
-	// Direct forcing velocity delta
-	float4 vuForce = (u_pp - v_pp); // Proportional to force on particle, prop. const. = 1
+	// Conmpute force on particle = (u-v)*dA
+	float4 vuForce = (u_pp - v_pp)*flpDat->PointArea;
 	float4 vuTorque = cross(r_0,vuForce);
 
 	//printf("point = %d, u_pp = %f %f %f (%f)\n", pointID, u_pp.x, u_pp.y, u_pp.z, u_pp.w);
@@ -196,9 +197,11 @@ __kernel void particle_fluid_forces_linear_stencil(
 		int writeCount = atomic_inc(countPoint+i_1D); // The p'th time a surface point writes to this node
 		int j = writeCount%intDat->MaxSurfPointsPerNode;
 		
-		gpf[i_1D + N_C*(3*j    )] -= weights[n]*flpDat->PointArea*vuForce.x;
-		gpf[i_1D + N_C*(3*j + 1)] -= weights[n]*flpDat->PointArea*vuForce.y;
-		gpf[i_1D + N_C*(3*j + 2)] -= weights[n]*flpDat->PointArea*vuForce.z;
+		//printf("i_1D, write count: %d %d\n", i_1D, j);
+		
+		gpf[i_1D + N_C*(3*j    )] -= weights[n]*vuForce.x;
+		gpf[i_1D + N_C*(3*j + 1)] -= weights[n]*vuForce.y;
+		gpf[i_1D + N_C*(3*j + 2)] -= weights[n]*vuForce.z;
 		
 		//if (x_n == 13 && y_n == 13) printf("i_1D, write g = %d: %f, %f, %f\n", i_1D, gpf[i_1D + N_C*(3*j)    ], gpf[i_1D + N_C*(3*j + 1)], gpf[i_1D + N_C*(3*j + 2)]);
 	}
@@ -334,14 +337,17 @@ __kernel void collideMRT_stream_D3Q19(
 
 	// Read fluid particle force	
 	// Use smoothing kernel (need more efficient implementation)
-	int sten[3] = {1,2,1};
+	float sten[3] = {0.25, 0.5, 0.25};
+	
+	//float wSum = 0.0;
 	
 	for(int sx = -1; sx <= 1; sx++) {
 		for(int sy = -1; sy <= 1; sy++) {
 			for(int sz = -1; sz <= 1; sz++) {
 		
 				int i_S = (i_x+sx) + N_x*((i_y+sy) + N_y*(i_z+sz));
-				float w_s = sten[sx+1]*sten[sy+1]*sten[sz+1]/64.0f;
+				float w_s = sten[sx+1]*sten[sy+1]*sten[sz+1]; //64.0f;
+				//wSum += w_s;
 				
 				g_x += w_s*gpf[i_S        ]; 
 				g_y += w_s*gpf[i_S + N_C*1];
@@ -349,11 +355,14 @@ __kernel void collideMRT_stream_D3Q19(
 			}
 		}
 	}
+	
+	//if (i_x == 32 && i_z == 32) printf("wSum = %f\n", wSum);
+	
 	countPointWrite[i_1D] = 0;
 
 #endif
 
-	// Compute velocity (J. Stat. Mech. (2010) P01018 convention)
+	// Compute velocity
 	// w/ body force contribution (Guo et al. 2002)
 	float u_x = (f[1]-f[2]+f[7]+f[8] +f[9] +f[10]-f[11]-f[12]-f[13]-f[14] + 0.5f*g_x)/rho;
 	float u_y = (f[3]-f[4]+f[7]-f[8] +f[11]-f[12]+f[15]+f[16]-f[17]-f[18] + 0.5f*g_y)/rho;
@@ -766,7 +775,7 @@ __kernel void boundary_velocity(
 	// Read in 14 knowns
 	float f_k[14];
 	for (int i_k=0; i_k<14; i_k++) {
-		f_k[i_k] = f_s[i_1D + tabKn[i_w][i_k]*N_C ];
+		f_k[i_k] = f_s[i_1D + tabKn[i_w][i_k]*N_C];
 	}
 
 	// Read in velocities
@@ -788,7 +797,7 @@ __kernel void boundary_velocity(
 	float u_a2 = u[tabAxes[i_w][2]]; // Tangential velocity axis 2
 
 	// Calculate rho
-#ifdef HECHT_RHO
+#ifdef VEL_BC_RHO
 	float rho = (f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
 		+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]))/(1.0f-u_n);
 #else
@@ -798,10 +807,15 @@ __kernel void boundary_velocity(
 		+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]))/rho;
 #endif	
 	
+#ifdef VEL_BC_MOM_CORR
 	// Calculate 'tranverse momentum correction'
 	float N_a1 = 0.5f*(f_k[1]+f_k[5]+f_k[6] -f_k[2]-f_k[7]-f_k[8]) - rho*u_a1/3.0f;
 	float N_a2 = 0.5f*(f_k[3]+f_k[5]+f_k[7] -f_k[4]-f_k[6]-f_k[8]) - rho*u_a2/3.0f;
-
+#else	
+	float N_a1 = 0.0;
+	float N_a2 = 0.0;
+#endif
+	
 	// Calculate unknown normal to wall, write to f_s for this node
 	f_s[i_1D + tabUn[i_w][0]*N_C] = f_k[9] + rho*u_n/3.0f;
 
