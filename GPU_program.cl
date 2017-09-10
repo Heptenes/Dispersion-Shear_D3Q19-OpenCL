@@ -5,6 +5,8 @@
 #define USE_VARIABLE_BODY_FORCE
 #define MIN_TAU 0.505
 #define VEL_BC_RHO
+//#define VEL_OUTLET_EQ
+//#define VEL_BC_MOM_CORR
 //#define CASSON
 
 //#include "struct_header_device.h"
@@ -181,7 +183,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 	float4 v_pp = vPar + cross(angVel,r_pp); // Order is important
 
 	// Conmpute force on particle = (u-v)*dA
-	float4 vuForce = (u_pp - v_pp)*flpDat->PointArea;
+	float4 vuForce = 1.0f*(u_pp - v_pp)*flpDat->PointArea;
 	float4 vuTorque = cross(r_0,vuForce);
 
 	//printf("point = %d, u_pp = %f %f %f (%f)\n", pointID, u_pp.x, u_pp.y, u_pp.z, u_pp.w);
@@ -197,13 +199,13 @@ __kernel void particle_fluid_forces_linear_stencil(
 
 		int writeCount = atomic_inc(countPoint+i_1D); // The p'th time a surface point writes to this node
 		int j = writeCount%intDat->MaxSurfPointsPerNode;
-		
+
 		//printf("i_1D, write count: %d %d\n", i_1D, j);
-		
+
 		gpf[i_1D + N_C*(3*j    )] -= weights[n]*vuForce.x;
 		gpf[i_1D + N_C*(3*j + 1)] -= weights[n]*vuForce.y;
 		gpf[i_1D + N_C*(3*j + 2)] -= weights[n]*vuForce.z;
-		
+
 		//if (x_n == 13 && y_n == 13) printf("i_1D, write g = %d: %f, %f, %f\n", i_1D, gpf[i_1D + N_C*(3*j)    ], gpf[i_1D + N_C*(3*j + 1)], gpf[i_1D + N_C*(3*j + 2)]);
 	}
 
@@ -228,7 +230,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 	if(localID == 0) {
 		parFluidForce[groupID] = parFluidForceSum[globalID]; // Return summed force
 		parFluidForce[groupID + numGroups] = parFluidForceSum[globalID + globalSize]; // Summed torque
-		
+
 		//printf("Force return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID, globalID);
 		//printf("= %f %f %f\n", parFluidForce[groupID].x, parFluidForce[groupID].y, parFluidForce[groupID].z);
 		//printf("Torque return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
@@ -241,8 +243,8 @@ __kernel void sum_particle_fluid_forces(
 	__global flp_param_struct* flpDat, // maybe not needed
 	__global float* gpf)
 {
-	
-	int i_x = get_global_id(0); 
+
+	int i_x = get_global_id(0);
 	int i_y = get_global_id(1);
 	int i_z = get_global_id(2);
 
@@ -253,20 +255,20 @@ __kernel void sum_particle_fluid_forces(
 
 	// 1D index
 	int i_1D = i_x + N_x*(i_y + N_y*i_z);
-	
+
 	for (int j = 1; j < intDat->MaxSurfPointsPerNode; j++) {
-		
+
 		gpf[i_1D        ] += gpf[i_1D + N_C*(3*j    )]; // Write to j=0 part of array
 		gpf[i_1D + N_C*1] += gpf[i_1D + N_C*(3*j + 1)];
 		gpf[i_1D + N_C*2] += gpf[i_1D + N_C*(3*j + 2)];
-		
+
 		//if (i_x == 13 && i_y == 13) printf("i_1D, j, +=g, %d, %d, %f, %f, %f\n", i_1D, j,
 		//	gpf[i_1D + N_C*(3*j    )], gpf[i_1D + N_C*(3*j + 1)], gpf[i_1D + N_C*(3*j + 2)]);
 
 		gpf[i_1D + N_C*(3*j    )] = 0.0f;
 		gpf[i_1D + N_C*(3*j + 1)] = 0.0f;
 		gpf[i_1D + N_C*(3*j + 2)] = 0.0f;
-	}	
+	}
 }
 
 
@@ -275,8 +277,8 @@ __kernel void reset_particle_fluid_forces(
 	__global flp_param_struct* flpDat, // maybe not needed
 	__global float* gpf)
 {
-	
-	int i_x = get_global_id(0); 
+
+	int i_x = get_global_id(0);
 	int i_y = get_global_id(1);
 	int i_z = get_global_id(2);
 
@@ -287,10 +289,10 @@ __kernel void reset_particle_fluid_forces(
 
 	// 1D index
 	int i_1D = i_x + N_x*(i_y + N_y*i_z);
-	
+
 	gpf[i_1D        ] = 0.0f;
 	gpf[i_1D + N_C*1] = 0.0f;
-	gpf[i_1D + N_C*2] = 0.0f;	
+	gpf[i_1D + N_C*2] = 0.0f;
 }
 
 
@@ -336,29 +338,29 @@ __kernel void collideMRT_stream_D3Q19(
 
 #ifdef USE_VARIABLE_BODY_FORCE
 
-	// Read fluid particle force	
+	// Read fluid particle force
 	// Use smoothing kernel (need more efficient implementation)
 	float sten[3] = {0.25, 0.5, 0.25};
-	
+
 	//float wSum = 0.0;
-	
+
 	for(int sx = -1; sx <= 1; sx++) {
 		for(int sy = -1; sy <= 1; sy++) {
 			for(int sz = -1; sz <= 1; sz++) {
-		
+
 				int i_S = (i_x+sx) + N_x*((i_y+sy) + N_y*(i_z+sz));
 				float w_s = sten[sx+1]*sten[sy+1]*sten[sz+1]; //64.0f;
 				//wSum += w_s;
-				
-				g_x += w_s*gpf[i_S        ]; 
+
+				g_x += w_s*gpf[i_S        ];
 				g_y += w_s*gpf[i_S + N_C*1];
 				g_z += w_s*gpf[i_S + N_C*2];
 			}
 		}
 	}
-	
+
 	//if (i_x == 32 && i_z == 32) printf("wSum = %f\n", wSum);
-	
+
 	countPointWrite[i_1D] = 0;
 
 #endif
@@ -437,7 +439,7 @@ __kernel void collideMRT_stream_D3Q19(
 	float tau = flpDat->NewtonianTau;
 #else
 
-	// Compute local expression for shear rate tensor, using tau from previous time step
+	/* Compute local expression for shear rate tensor, using tau from previous time step
 	float tau = tau_p[i_1D];
 
 	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
@@ -541,7 +543,7 @@ __kernel void collideMRT_stream_D3Q19(
 	// Tau redefinition for this time step
 	tau = compute_tau(srtII, &(flpDat->ViscosityParams[0]));
 	tau_p[i_1D] = tau;
-
+*/
 #endif // Tau computation
 
 	// Recalcualate s
@@ -789,7 +791,7 @@ __kernel void boundary_velocity(
 	u_w[5] = flpDat->VelUpper[2];
 
 	float u[3]; // Velocity for this node
-	u[0] = u_w[i_lu*3	 ]; // i_lu =  0 or 1 for lower or upper wall 
+	u[0] = u_w[i_lu*3	 ]; // i_lu =  0 or 1 for lower or upper wall
 	u[1] = u_w[i_lu*3 + 1];
 	u[2] = u_w[i_lu*3 + 2];
 
@@ -806,17 +808,17 @@ __kernel void boundary_velocity(
 	float rho = 1.0f;
 	u_n = 1 - (f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
 		+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]))/rho;
-#endif	
-	
+#endif
+
 #ifdef VEL_BC_MOM_CORR
 	// Calculate 'tranverse momentum correction'
 	float N_a1 = 0.5f*(f_k[1]+f_k[5]+f_k[6] -f_k[2]-f_k[7]-f_k[8]) - rho*u_a1/3.0f;
 	float N_a2 = 0.5f*(f_k[3]+f_k[5]+f_k[7] -f_k[4]-f_k[6]-f_k[8]) - rho*u_a2/3.0f;
-#else	
+#else
 	float N_a1 = 0.0;
 	float N_a2 = 0.0;
 #endif
-	
+
 	// Calculate unknown normal to wall, write to f_s for this node
 	f_s[i_1D + tabUn[i_w][0]*N_C] = f_k[9] + rho*u_n/3.0f;
 
@@ -825,7 +827,17 @@ __kernel void boundary_velocity(
 	f_s[i_1D + tabUn[i_w][2]*N_C] = f_k[10] + rho*(u_n - u_a1)/6.0f + N_a1;
 	f_s[i_1D + tabUn[i_w][3]*N_C] = f_k[13] + rho*(u_n + u_a2)/6.0f - N_a2;
 	f_s[i_1D + tabUn[i_w][4]*N_C] = f_k[12] + rho*(u_n - u_a2)/6.0f + N_a2;
-	
+/*
+#ifdef VEL_OUTLET_EQ
+	if (i_lu == 1) {
+		float f_eq[19];
+		equilibirum_distribution_D3Q19(f_eq, rho, u[0], u[1], u[2]);
+		f_s[i_1D + tabUn[i_w][1]*N_C] = f_eq[tabUn[i_w][1]];
+		f_s[i_1D + tabUn[i_w][2]*N_C] = f_eq[tabUn[i_w][2]];
+		f_s[i_1D + tabUn[i_w][3]*N_C] = f_eq[tabUn[i_w][3]];
+		f_s[i_1D + tabUn[i_w][4]*N_C] = f_eq[tabUn[i_w][4]];
+	}
+#endif */
 }
 
 

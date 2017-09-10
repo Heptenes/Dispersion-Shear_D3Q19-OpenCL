@@ -119,6 +119,8 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 		vel[1] = hostDat->InitialVel[1];
 		vel[2] = hostDat->InitialVel[2];
 
+		printf("Initializing f with constant velocity = %e %e %e\n", vel[0], vel[1], vel[2]);
+
 		equilibrium_distribution_D3Q19(1.0, vel, f_eq);
 
 		// Use propagation-optimized data layouts
@@ -259,6 +261,22 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 			parKinematics[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
 		}
 	}
+	else if (hostDat->InitialParticleDistribution == 3) {
+		// Place particle centrally, wrt y and z
+		// hostDat->ParticleBuffer along the x direction
+
+		if (intDat->NumParticles > 1) {
+			perror("Error: Single-particle initial distribution chosen with more than 1 particle.");
+		}
+		// Position and velocity
+		float px = hostDat->ParticleBuffer;
+		float py = ((float)intDat->LatticeSize[1]-3)/2.0f;
+		float pz = ((float)intDat->LatticeSize[2]-3)/2.0f;
+		parKinematics[0] = (cl_float4){{px, py, pz, 0.0f}};
+		parKinematics[1] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
+		printf("Placing single particle at position %f %f %f\n", px, py, pz);
+
+	}
 	else {
 		perror("Error: initial_particle_distribution option not a known value\n");
 	}
@@ -286,11 +304,11 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	zone_struct** zoneDat)
 {
 	// Calculate estimate of max particle relative speed
-	float vMax = 0.05; // Guess
+	float vMax = 0.05f; // Guess
 	for (int i = 0; i < 3; i++) {
 		vMax = vMax < fabsf(flpDat->VelUpper[i]) ? fabsf(flpDat->VelUpper[i]) : vMax;
 		vMax = vMax < fabsf(flpDat->VelLower[i]) ? fabsf(flpDat->VelLower[i]) : vMax;
-		float nu = (flpDat->NewtonianTau-0.5)/3.0;
+		float nu = (flpDat->NewtonianTau-0.5f)/3.0f;
 		float vMaxNewt = flpDat->ConstBodyForce[i]*(intDat->LatticeSize[i]-3.0f)*(intDat->LatticeSize[i]-3.0f)/(12.0f*nu);
 		vMax = vMax < vMaxNewt ? vMaxNewt : vMax;
 	}
@@ -336,9 +354,9 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		printf("Particle %d has position ", p);
 		printf("%f %f %f\n", parKinematics[p].x, parKinematics[p].y, parKinematics[p].z);
 
-		int zoneIDx = parKinematics[p].x/flpDat->ZoneWidth[0];
-		int zoneIDy = parKinematics[p].y/flpDat->ZoneWidth[1];
-		int zoneIDz = parKinematics[p].z/flpDat->ZoneWidth[2];
+		int zoneIDx = (int)(parKinematics[p].x/flpDat->ZoneWidth[0]);
+		int zoneIDy = (int)(parKinematics[p].y/flpDat->ZoneWidth[1]);
+		int zoneIDz = (int)(parKinematics[p].z/flpDat->ZoneWidth[2]);
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
 
 		parsZone[p] = zoneID;
@@ -443,11 +461,11 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(programGPU, "particle_fluid_forces_linear_stencil", &error);
 	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
 		print_program_build_log(&programGPU, &devices[1]);
-	
+
 	kernelDat->sum_particle_fluid_forces = clCreateKernel(programGPU, "sum_particle_fluid_forces", &error);
 	if (!error_check(error, "sum_particle_fluid_forces", 1))
 		print_program_build_log(&programGPU, &devices[1]);
-	
+
 	kernelDat->reset_particle_fluid_forces = clCreateKernel(programGPU, "reset_particle_fluid_forces", &error);
 	if (!error_check(error, "reset_particle_fluid_forces", 1))
 		print_program_build_log(&programGPU, &devices[1]);
@@ -470,7 +488,7 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 		CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &actualWorkGrpSize, NULL);
 
 	int tempSize = (cl_int)actualWorkGrpSize;
-	int power2 = ceil(log2(tempSize)-1E-6);
+	int power2 = (int)ceil(log2(tempSize)-1E-6);
 	int workSize = 1;	// Integer exponentiation 2^power2
 	for(int i = 0; i < power2; i++) {
 		workSize *= 2;
@@ -603,11 +621,11 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 	int n_x = intDat->LatticeSize[0];
 	int n_y = intDat->LatticeSize[1];
 	int n_z = intDat->LatticeSize[2];
-	float n_s = hostDat->FluidOutputSpacing; // for float division
+	int n_s = hostDat->FluidOutputSpacing; // for float division
 	int n_L = n_x*n_y*n_z;
-	
-	int n_print = ceil(n_x/n_s)*ceil(n_y/n_s)*ceil(n_z/n_s);
-	
+
+	int n_print = (int)(ceil(n_x/n_s)*ceil(n_y/n_s)*ceil(n_z/n_s));
+
 	fprintf(vidPtr, "%d\n", n_print);
 	fprintf(vidPtr, "D3Q19_output, frame %d\n", frame);
 
@@ -624,10 +642,10 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 			}
 		}
 	}
-	
-	
+
+
 	// Write particles
-	
+
 }
 
 int write_lattice_field(cl_float* field, int_param_struct* intDat)
@@ -651,11 +669,11 @@ int write_lattice_field(cl_float* field, int_param_struct* intDat)
 		}
 	}
 	fclose(fPtr);
-	
+
 	FILE* fPtr2;
 	fPtr2 = fopen ("matlab_postproc/velocity_field_centerline.txt","w");
-	
-	int i_y = floor((float)intDat->LatticeSize[1]/2.0f); 
+
+	int i_y = floor((float)intDat->LatticeSize[1]/2.0f);
 
 	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x++) {
 		for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z++) {
@@ -669,7 +687,7 @@ int write_lattice_field(cl_float* field, int_param_struct* intDat)
 		}
 	}
 	fclose(fPtr2);
-	
+
 	return 0;
 }
 
@@ -737,7 +755,7 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 	error = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, numGPUs, devicePtrGPU, NULL);
 
 	// Print CPU information
-	for(int i=0; i < numCPUs; i++)
+	for(int i=0; i < (int)numCPUs; i++)
 	{
 		char buf_name[1024];
 		cl_uint buf_cu, buf_freq;
@@ -760,7 +778,7 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 	}
 
 	// Print GPU information
-	for(int i=0; i < numGPUs; i++)
+	for(int i=0; i < (int)numGPUs; i++)
 	{
 		char buf_name[1024];
 		cl_uint buf_cu, buf_freq;
@@ -807,7 +825,7 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 
 	// Constant coord for each face and its value, then upper range of loop for other 2 axis
 	// x-axis on inner loop where possible
-	const int faceSpec[6][6] = {
+	int faceSpec[6][6] = {
 		{0,b,		2,N_z-b-2, 1,N_y-b-2}, // N-b-2 because edges/verts of face treated separately
 		{0,N_x-b-1, 2,N_z-b-2, 1,N_y-b-2}, // Loops are inclusive (<=) upper range
 		{1,b,		2,N_z-b-2, 0,N_x-b-2},
@@ -817,7 +835,7 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 	};
 
 	// Two constant coords for each edge and their value, then upper range of the edge axis
-	const int edgeSpec[12][6] = {
+	int edgeSpec[12][6] = {
 		{0,b,		1,b,	   2,N_z-b-2},
 		{0,b,		1,N_y-b-1, 2,N_z-b-2},
 		{0,b,		2,b,	   1,N_y-b-2},
@@ -833,7 +851,7 @@ int create_periodic_stream_mapping(int_param_struct* intDat, cl_int** strMapPtr)
 	};
 
 	// Coords of vertexes
-	const int vertSpec[8][3] = {
+	int vertSpec[8][3] = {
 		{b,			b,		   b	  },
 		{b,			b,		   N_z-b-1},
 		{b,			N_y-b-1,   b	  },
@@ -948,29 +966,29 @@ int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq)
 
 	// f_eq = w*rho*(1 + 3*v.c + 4.5*(v.c)^2 - 1.5*|v|^2)
 
-	f_eq[0] = (rho/3.0)*(1.0 - 1.5*vsq);
+	f_eq[0] = (rho/3.0f)*(1.0f - 1.5f*vsq);
 
-	f_eq[1] = (rho/18.0)*(1.0 + 3.0*vx + 4.5*vx*vx - 1.5*vsq);
-	f_eq[2] = (rho/18.0)*(1.0 - 3.0*vx + 4.5*vx*vx - 1.5*vsq);
-	f_eq[3] = (rho/18.0)*(1.0 + 3.0*vy + 4.5*vy*vy - 1.5*vsq);
-	f_eq[4] = (rho/18.0)*(1.0 - 3.0*vy + 4.5*vy*vy - 1.5*vsq);
-	f_eq[5] = (rho/18.0)*(1.0 + 3.0*vz + 4.5*vz*vz - 1.5*vsq);
-	f_eq[6] = (rho/18.0)*(1.0 - 3.0*vz + 4.5*vz*vz - 1.5*vsq);
+	f_eq[1] = (rho/18.0f)*(1.0f + 3.0f*vx + 4.5f*vx*vx - 1.5f*vsq);
+	f_eq[2] = (rho/18.0f)*(1.0f - 3.0f*vx + 4.5f*vx*vx - 1.5f*vsq);
+	f_eq[3] = (rho/18.0f)*(1.0f + 3.0f*vy + 4.5f*vy*vy - 1.5f*vsq);
+	f_eq[4] = (rho/18.0f)*(1.0f - 3.0f*vy + 4.5f*vy*vy - 1.5f*vsq);
+	f_eq[5] = (rho/18.0f)*(1.0f + 3.0f*vz + 4.5f*vz*vz - 1.5f*vsq);
+	f_eq[6] = (rho/18.0f)*(1.0f - 3.0f*vz + 4.5f*vz*vz - 1.5f*vsq);
 
-	f_eq[7] = (rho/36.0)*(1.0 + 3.0*(vx+vy) + 4.5*(vx+vy)*(vx+vy) - 1.5*vsq);
-	f_eq[8] = (rho/36.0)*(1.0 + 3.0*(vx-vy) + 4.5*(vx-vy)*(vx-vy) - 1.5*vsq);
-	f_eq[9] = (rho/36.0)*(1.0 + 3.0*(vx+vz) + 4.5*(vx+vz)*(vx+vz) - 1.5*vsq);
-	f_eq[10] = (rho/36.0)*(1.0 + 3.0*(vx-vz) + 4.5*(vx-vz)*(vx-vz) - 1.5*vsq);
+	f_eq[7] = (rho/36.0f)*(1.0f + 3.0f*(vx+vy) + 4.5f*(vx+vy)*(vx+vy) - 1.5f*vsq);
+	f_eq[8] = (rho/36.0f)*(1.0f + 3.0f*(vx-vy) + 4.5f*(vx-vy)*(vx-vy) - 1.5f*vsq);
+	f_eq[9] = (rho/36.0f)*(1.0f + 3.0f*(vx+vz) + 4.5f*(vx+vz)*(vx+vz) - 1.5f*vsq);
+	f_eq[10] = (rho/36.0f)*(1.0f + 3.0f*(vx-vz) + 4.5f*(vx-vz)*(vx-vz) - 1.5f*vsq);
 
-	f_eq[11] = (rho/36.0)*(1.0 + 3.0*(-vx+vy) + 4.5*(-vx+vy)*(-vx+vy) - 1.5*vsq);
-	f_eq[12] = (rho/36.0)*(1.0 + 3.0*(-vx-vy) + 4.5*(-vx-vy)*(-vx-vy) - 1.5*vsq);
-	f_eq[13] = (rho/36.0)*(1.0 + 3.0*(-vx+vz) + 4.5*(-vx+vz)*(-vx+vz) - 1.5*vsq);
-	f_eq[14] = (rho/36.0)*(1.0 + 3.0*(-vx-vz) + 4.5*(-vx-vz)*(-vx-vz) - 1.5*vsq);
+	f_eq[11] = (rho/36.0f)*(1.0f + 3.0f*(-vx+vy) + 4.5f*(-vx+vy)*(-vx+vy) - 1.5f*vsq);
+	f_eq[12] = (rho/36.0f)*(1.0f + 3.0f*(-vx-vy) + 4.5f*(-vx-vy)*(-vx-vy) - 1.5f*vsq);
+	f_eq[13] = (rho/36.0f)*(1.0f + 3.0f*(-vx+vz) + 4.5f*(-vx+vz)*(-vx+vz) - 1.5f*vsq);
+	f_eq[14] = (rho/36.0f)*(1.0f + 3.0f*(-vx-vz) + 4.5f*(-vx-vz)*(-vx-vz) - 1.5f*vsq);
 
-	f_eq[15] = (rho/36.0)*(1.0 + 3.0*(vy+vz) + 4.5*(vy+vz)*(vy+vz) - 1.5*vsq);
-	f_eq[16] = (rho/36.0)*(1.0 + 3.0*(vy-vz) + 4.5*(vy-vz)*(vy-vz) - 1.5*vsq);
-	f_eq[17] = (rho/36.0)*(1.0 + 3.0*(-vy+vz) + 4.5*(-vy+vz)*(-vy+vz) - 1.5*vsq);
-	f_eq[18] = (rho/36.0)*(1.0 + 3.0*(-vy-vz) + 4.5*(-vy-vz)*(-vy-vz) - 1.5*vsq);
+	f_eq[15] = (rho/36.0f)*(1.0f + 3.0f*(vy+vz) + 4.5f*(vy+vz)*(vy+vz) - 1.5f*vsq);
+	f_eq[16] = (rho/36.0f)*(1.0f + 3.0f*(vy-vz) + 4.5f*(vy-vz)*(vy-vz) - 1.5f*vsq);
+	f_eq[17] = (rho/36.0f)*(1.0f + 3.0f*(-vy+vz) + 4.5f*(-vy+vz)*(-vy+vz) - 1.5f*vsq);
+	f_eq[18] = (rho/36.0f)*(1.0f + 3.0f*(-vy-vz) + 4.5f*(-vy-vz)*(-vy-vz) - 1.5f*vsq);
 
 	return 0;
 }

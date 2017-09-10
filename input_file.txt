@@ -1,5 +1,5 @@
 iterations                      10000
-ovito_xyz_video_freq            100000
+ovito_xyz_video_freq            40000
 console_print_freq              10
 constant_body_force             0.0 0.0 0.0
 newtonian_tau                   1.0
@@ -7,23 +7,23 @@ newtonian_tau                   1.0
 viscosity_model                 1
 viscosity_params                0.0005 0.01
 
-total_lattice_size              67 67 67
+total_lattice_size              259 83 83
 initial_f                       constant
-initial_vel                     0.0 0.0 0.0
-boundary_conditions_xyz         0 0 1
-velocity_bc_upper               0.01 0.0 0.0
-velocity_bc_lower               0.01 0.0 0.0
+initial_vel                     0.0238 0.0 0.0
+boundary_conditions_xyz         1 0 0
+velocity_bc_upper               0.0238 0.0 0.0
+velocity_bc_lower               0.0238 0.0 0.0
 cpu_only_mode                   0
 
 domain_decomposition            4 1 1
 
 num_particles                   1
-particle_diameter               10.0
-initial_particle_buffer         32.0
-initial_particle_distribution   2
-rebuild_neigh_list_freq         10
+particle_diameter               14.0
+initial_particle_buffer         64.0
+initial_particle_distribution   3
+rebuild_neigh_list_freq         20
 
-surf_point_write_atomic         12
+surf_point_write_atomic         8
 
 particle_collision_model        1
 particle_collision_params       1.0  0.0

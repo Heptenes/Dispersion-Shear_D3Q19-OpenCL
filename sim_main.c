@@ -43,6 +43,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	flp_param_struct flpDat;
 	kernel_struct kernelDat;
 	zone_struct* zoneDat;
+	size_t maxKernelSize = 256*128*128;
 
 	printf("Int struct size: %lu\n", sizeof(intDat));
 	printf("Flp struct size: %lu\n", sizeof(flpDat));
@@ -63,8 +64,13 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 	// Some useful data sizes (cl functions often need size_t*)
 	size_t numNodes = intDat.LatticeSize[0]*intDat.LatticeSize[1]*intDat.LatticeSize[2];
+	size_t splitKernelSize = 1 + (numNodes-1)/maxKernelSize;
+	//printf("Splitting fluid kernel into %d kernels\n", (int)splitKernelSize);
+	size_t fluid_kernel_work_size[3];
+	size_t fluid_kernel_work_offset[3];
+
 	size_t numParThreads = hostDat->DomainDecomp[0]*hostDat->DomainDecomp[1]*hostDat->DomainDecomp[2];
-	size_t numSurfPoints = intDat.TotalSurfPoints;
+	size_t numSurfPoints = intDat.NumParticles > 0 ? intDat.TotalSurfPoints : 32;
 	size_t pointWorkSize = intDat.PointsPerWorkGroup;
 
 	size_t fDataSize = numNodes*LB_Q*sizeof(cl_float);
@@ -111,13 +117,14 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	// Lattice fields
 	cl_int err_cl = CL_SUCCESS;
 	fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
-	fB_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
+	fB_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, &err_cl);
 	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, NULL);
 	gpf_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, NULL);
 	countPoint_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_int), NULL, NULL);
 	if (intDat.ViscosityModel != 0) {
 		tau_p_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, NULL);
 	}
+	error_check(err_cl, "clCreateBuffer 1", 1);
 
 	// Particle arrays
 	parKin_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*4, parKin, NULL);
@@ -135,8 +142,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	threadMembers_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, intDat.NumParticles*sizeof(cl_int), threadMembers, NULL);
 	numParInThread_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, numParThreads*sizeof(cl_int), numParInThread, NULL);
 	zoneDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, totalNumZones*sizeof(zone_struct), zoneDat, NULL);
-	spherePoints_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, intDat.PointsPerParticle*sizeof(cl_float4), NULL, &err_cl);
-	error_check(err_cl, "clCreateBuffer 1", 1);
+	spherePoints_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, intDat.PointsPerParticle*sizeof(cl_float4), NULL, NULL);
+
 
 	// --- WRITE BUFFERS --------------------------------------------------------
 	err_cl = CL_SUCCESS;
@@ -146,7 +153,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, gpf_cl, CL_TRUE, 0, a3DataSize*intDat.MaxSurfPointsPerNode, gpf_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, countPoint_cl, CL_TRUE, 0, numNodes*sizeof(cl_int), countPoint_h, 0, NULL, NULL);
 	if (intDat.ViscosityModel != 0) {
-		err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, tau_p_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_p_h, 0, NULL, NULL);
+		//err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, tau_p_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_p_h, 0, NULL, NULL);
 	}
 	error_check(err_cl, "clEnqueueWriteBuffer 1", 1);
 	err_cl = CL_SUCCESS;
@@ -213,11 +220,11 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clSetKernelArg(kernelDat.particle_fluid_forces_linear_stencil, 6, memSize, &parFluidForceSum_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_fluid_forces_linear_stencil, 7, memSize, &spherePoints_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_fluid_forces_linear_stencil, 8, memSize, &countPoint_cl);
-			
+
 	err_cl |= clSetKernelArg(kernelDat.sum_particle_fluid_forces, 0, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.sum_particle_fluid_forces, 1, memSize, &flpDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.sum_particle_fluid_forces, 2, memSize, &gpf_cl);
-	
+
 	err_cl |= clSetKernelArg(kernelDat.reset_particle_fluid_forces, 0, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.reset_particle_fluid_forces, 1, memSize, &flpDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.reset_particle_fluid_forces, 2, memSize, &gpf_cl);
@@ -286,15 +293,27 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		}
 
 		// Kernel: LB collide and stream
-		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collideSRT_stream_D3Q19, 3,
-			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+		for (size_t i_k = 0; i_k < splitKernelSize; i_k++) {
+
+			/* fluid_kernel_work_size[0] = global_work_size[0]/splitKernelSize;
+			fluid_kernel_work_size[1] = global_work_size[1];
+			fluid_kernel_work_size[2] = global_work_size[2];
+			fluid_kernel_work_offset[0] = lattice_work_offset[0] + i_k*global_work_size[0]/splitKernelSize;
+			fluid_kernel_work_offset[1] = lattice_work_offset[1];
+			fluid_kernel_work_offset[2] = lattice_work_offset[2];
+			printf("Fluid kernel with global size %d %d %d\n", (int)fluid_kernel_work_size[0], (int)fluid_kernel_work_size[1], (int)fluid_kernel_work_size[2]);
+			printf("and work offset %d %d %d\n", (int)fluid_kernel_work_offset[0], (int)fluid_kernel_work_offset[1], (int)fluid_kernel_work_offset[2]); */
+
+			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collideSRT_stream_D3Q19, 3,
+				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+		}
 
 		// Kernel: Particle update
 		//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
 		//	NULL, &numParThreads, NULL, 0, NULL, NULL);
 
 		clFinish(*GPU_QueuePtr);
-		
+
 		// Kernel: Reset particle-fluid force array
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.reset_particle_fluid_forces, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
@@ -319,12 +338,13 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.particle_fluid_forces_linear_stencil, 1,
 			NULL, &numSurfPoints, &pointWorkSize, 0, NULL, NULL);
 		//printf("Checkpoint: particle_fluid_forces\n");
-			
+
 		clFinish(*GPU_QueuePtr);
-		
+
+		// Kernel: Sum particle-fluid forces
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.sum_particle_fluid_forces, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
-			
+
 		// Kernel: Particle-particle forces
 		//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
 		//	NULL, &numParThreads, NULL, 0, NULL, NULL);
@@ -351,7 +371,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		if (t%hostDat->VideoFreq == 0) {
 			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 			error_check(err_cl, "clEnqueueReadBuffer Video", 1);
-			
+
 			continuous_output(hostDat, &intDat, u_h, parKin, vidPtr, t);
 		}
 
@@ -364,8 +384,15 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	error_check(err_cl, "clEnqueueReadBuffer", 1);
 
 	write_lattice_field(u_h, &intDat);
-	
-	printf("Final force on particle 1 = %f %f %f\n", parFluidForce[0].x, parFluidForce[0].y, parFluidForce[0].z);
+
+	float finalForce[3] = {0.0, 0.0, 0.0};
+	for (int i_fa = 0; i_fa < intDat.NumForceArrays; i_fa++) {
+		finalForce[0] += parFluidForce[i_fa].x;
+		finalForce[1] += parFluidForce[i_fa].y;
+		finalForce[2] += parFluidForce[i_fa].z;
+		printf("Final force += %f %f %f\n", parFluidForce[i_fa].x, parFluidForce[i_fa].y, parFluidForce[i_fa].z);
+	}
+	printf("Final force on particle 1 = %f %f %f\n", finalForce[0], finalForce[1], finalForce[2]);
 
 	// Cleanup
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);
