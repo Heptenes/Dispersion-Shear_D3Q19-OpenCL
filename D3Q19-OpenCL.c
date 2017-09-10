@@ -36,6 +36,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"initial_f", TYPE_STRING, &(hostDat->InitialDist), "zero"},
 		{"initial_vel", TYPE_FLOAT_3VEC, &(hostDat->InitialVel), "0.0 0.0 0.0"},
 		{"boundary_conditions_xyz", TYPE_INT_3VEC, &(intDat->BoundaryConds), "0 0 0"},
+		{"tangential_vel_bcs", TYPE_INT_3VEC, &(hostDat->TangentialVelBC), "0 0 0"},
 		{"maintain_shear_rate", TYPE_INT_3VEC, &(intDat->MaintainShear), "0"},
 		{"velocity_bc_upper", TYPE_FLOAT_3VEC, &(flpDat->VelUpper), "0.0 0.0 0.0"},
 		{"velocity_bc_lower", TYPE_FLOAT_3VEC, &(flpDat->VelLower), "0.0 0.0 0.0"},

@@ -169,7 +169,9 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	size_t lattice_work_offset[3] = {1, 1, 1}; // Perf test this
 	size_t global_work_size[3];
 	size_t velBC_work_size[3];
-	cl_int wallAxis=0;
+	size_t tanBC_work_size[3];
+	cl_int wallAxis=0; cl_int tanAxis=0;
+	cl_int calcRho=1; cl_int tanCalcRho=0; 
 
 	// Work sizes
 	int velBoundary=0;
@@ -206,6 +208,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 1, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 2, memSize, &flpDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &wallAxis);
+	err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 4, sizeof(cl_int), &calcRho);
 
 	err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 1, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 2, memSize, &strMap_cl);
@@ -323,16 +326,34 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			NULL, &periodic_work_size, NULL, 0, NULL, NULL);
 
 		clFinish(*GPU_QueuePtr);
+		clFinish(*CPU_QueuePtr);
 
 		// Kernel: LB velocity boundary
 		if (velBoundary) {
 			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_velocity, 3,
 				lattice_work_offset, velBC_work_size, NULL, 0, NULL, NULL);
+			
+			// Additional velocity boundaries
+			for (int i = 0; i < 3; i++) {
+				if (hostDat->TangentialVelBC[i] == 1) {
+					//printf("Applying tangential velocity bounary on axis %d\n", i);
+					tanBC_work_size[i] = 2;
+					tanBC_work_size[(i+1)%3] = intDat.LatticeSize[(i+1)%3]-2;
+					tanBC_work_size[(i+2)%3] = intDat.LatticeSize[(i+2)%3]-2;
+					tanAxis = i;
+					
+					clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &tanAxis);
+					clSetKernelArg(kernelDat.boundary_velocity, 4, sizeof(cl_int), &tanCalcRho);
+					
+					clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_velocity, 3,
+						lattice_work_offset, tanBC_work_size, NULL, 0, NULL, NULL);
+						
+				}
+			}
+			clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &wallAxis);
+			clSetKernelArg(kernelDat.boundary_velocity, 4, sizeof(cl_int), &calcRho);
 			clFinish(*GPU_QueuePtr);
 		}
-
-		clFinish(*CPU_QueuePtr);
-		// Need to write updated particle kinematics to GPU if not using host pointer
 
 		// Kernel: Particle-fluid forces
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.particle_fluid_forces_linear_stencil, 1,

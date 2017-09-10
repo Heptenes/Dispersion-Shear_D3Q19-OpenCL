@@ -82,6 +82,7 @@ typedef struct {
 	int RebuildFreq;
 	int VideoFreq;
 	int FluidOutputSpacing;
+	int TangentialVelBC[3];
 
 } host_param_struct;
 

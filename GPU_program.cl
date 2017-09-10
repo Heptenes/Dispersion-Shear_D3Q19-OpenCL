@@ -439,7 +439,7 @@ __kernel void collideMRT_stream_D3Q19(
 	float tau = flpDat->NewtonianTau;
 #else
 
-	/* Compute local expression for shear rate tensor, using tau from previous time step
+	// Compute local expression for shear rate tensor, using tau from previous time step
 	float tau = tau_p[i_1D];
 
 	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
@@ -543,7 +543,7 @@ __kernel void collideMRT_stream_D3Q19(
 	// Tau redefinition for this time step
 	tau = compute_tau(srtII, &(flpDat->ViscosityParams[0]));
 	tau_p[i_1D] = tau;
-*/
+	
 #endif // Tau computation
 
 	// Recalcualate s
@@ -721,7 +721,8 @@ __kernel void boundary_velocity(
 	__global float* f_s,
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat,
-	int wallAxis) // Could try adding this argument to intDat
+	int wallAxis,
+	int calcRho)
 {
 
 	// Get 3D indices
@@ -731,6 +732,8 @@ __kernel void boundary_velocity(
 	i_3[2] = get_global_id(2);
 	int i_lu = get_global_id(wallAxis)-1; //  0 or 1 for lower or upper wall
 	int i_lu_pm = i_lu*2 - 1;			  // -1 or 1 for lower or upper wall
+	
+	//printf("Vel BC with wallAxis = %d and calcRho = %d\n", wallAxis, calcRho);
 
 	int N[3];
 	N[0] = intDat->LatticeSize[0];
@@ -800,15 +803,19 @@ __kernel void boundary_velocity(
 	float u_a2 = u[tabAxes[i_w][2]]; // Tangential velocity axis 2
 
 	// Calculate rho
-#ifdef VEL_BC_RHO
-	float rho = (f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
-		+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]))/(1.0f-u_n);
-#else
-	// Calculate inward normal vel with rho = 1
-	float rho = 1.0f;
-	u_n = 1 - (f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
-		+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]))/rho;
-#endif
+	float rho;
+	
+	// Shouldn't be any performance loss from if statement if all threads doing the same thing
+	if (calcRho) {
+		rho = (f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
+			+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]))/(1.0f-u_n);
+	}
+	else {
+		// Calculate inward normal vel with rho = 1
+		rho = 1.0f;
+		u_n = 1 - (f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
+			+ 2*(f_k[9]+f_k[10]+f_k[11]+f_k[12]+f_k[13]))/rho;
+	}
 
 #ifdef VEL_BC_MOM_CORR
 	// Calculate 'tranverse momentum correction'
