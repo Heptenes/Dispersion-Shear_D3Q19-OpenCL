@@ -1,4 +1,4 @@
-iterations                      438857
+iterations                      100000
 
 ovito_xyz_video_freq            1000
 fluid_ouput_spacing             4
@@ -7,8 +7,8 @@ console_print_freq              100
 constant_body_force             0.00001 0.0 0.0
 newtonian_tau                   1.268
 
-viscosity_model                 4
-viscosity_params                0.00016 0.0373333333333
+viscosity_model                 2
+viscosity_params                0.010451156235874894 0.5
 
 total_lattice_size              8 8 131
 

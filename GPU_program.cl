@@ -1,18 +1,23 @@
 
 #pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
 
-#define USE_CONSTANT_VISCOSITY
+//#define USE_CONSTANT_VISCOSITY
 #define USE_VARIABLE_BODY_FORCE
 #define MIN_TAU 0.505
+#define SRT_EPS 1E-8
 #define VEL_BC_RHO
 //#define VEL_OUTLET_EQ
 //#define VEL_BC_MOM_CORR
-//#define CASSON
 
 //#include "struct_header_device.h"
 
 #define PAR_COL_HARMONIC 1
 #define PAR_COL_LJ 2
+
+#define VISC_NEWTONIAN 1
+#define VISC_POWER_LAW 2
+#define VISC_HB 3
+#define VISC_CASSON 4
 
 typedef struct {
 
@@ -76,7 +81,7 @@ void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y
 void stream_locations(int n_x, int n_y, int n_z, int i_x, int i_y, int i_z, int* ind);
 void guo_body_force_term(float u_x, float u_y, float u_z,
 	float g_x, float g_y, float g_z, float* fGuo);
-float compute_tau(float srtII, __global float* params);
+float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global float* nonNewtonianParams);
 
 __kernel void particle_fluid_forces_linear_stencil(
 	__global int_param_struct* intDat,
@@ -138,7 +143,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 
 	// Adjust for periodic BCs (assume buffer of 1 unit for now)
 	float4 w = (float4)(N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f); // w is set to 1 to avoid nan when using fmod()
-	float4 r_pp = fmod(r_p,w);
+	float4 r_pp = fmod((r_p+w),w);
 
 	//printf("point = %d, r_p = %f %f %f (%f)\n", pointID, r_p.x, r_p.y, r_p.z, r_p.w);
 	//printf("point = %d, r_pp = %f %f %f (%f)\n", pointID, r_pp.x, r_pp.y, r_pp.z, r_pp.w);
@@ -180,10 +185,10 @@ __kernel void particle_fluid_forces_linear_stencil(
 	//printf("point = %d, u_pp = %f %f %f (%f)\n", pointID, u_pp.x, u_pp.y, u_pp.z, u_pp.w);
 
 	// Calculate velocity of node
-	float4 v_pp = vPar + cross(angVel,r_pp); // Order is important
+	float4 v_pp = vPar + cross(angVel,r_0); // Order is important
 
 	// Conmpute force on particle = (u-v)*dA
-	float4 vuForce = 1.0f*(u_pp - v_pp)*flpDat->PointArea;
+	float4 vuForce = (u_pp - v_pp)*flpDat->PointArea;
 	float4 vuTorque = cross(r_0,vuForce);
 
 	//printf("point = %d, u_pp = %f %f %f (%f)\n", pointID, u_pp.x, u_pp.y, u_pp.z, u_pp.w);
@@ -233,8 +238,8 @@ __kernel void particle_fluid_forces_linear_stencil(
 
 		//printf("Force return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID, globalID);
 		//printf("= %f %f %f\n", parFluidForce[groupID].x, parFluidForce[groupID].y, parFluidForce[groupID].z);
-		//printf("Torque return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
-		//printf("= %f %f %f\n\n", parFluidForce[groupID + numGroups].x, parFluidForce[groupID + numGroups].y, parFluidForce[groupID + numGroups].z);
+		printf("Torque return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
+		printf("= %f %f %f\n\n", parFluidForce[groupID + numGroups].x, parFluidForce[groupID + numGroups].y, parFluidForce[groupID + numGroups].z);
 	}
 }
 
@@ -541,7 +546,7 @@ __kernel void collideMRT_stream_D3Q19(
 	//printf("srtII = %f\n", srtII);
 
 	// Tau redefinition for this time step
-	tau = compute_tau(srtII, &(flpDat->ViscosityParams[0]));
+	tau = compute_tau(intDat->ViscosityModel, srtII, flpDat->NewtonianTau, &(flpDat->ViscosityParams[0]));
 	tau_p[i_1D] = tau;
 	
 #endif // Tau computation
@@ -731,7 +736,7 @@ __kernel void boundary_velocity(
 	i_3[1] = get_global_id(1);
 	i_3[2] = get_global_id(2);
 	int i_lu = get_global_id(wallAxis)-1; //  0 or 1 for lower or upper wall
-	int i_lu_pm = i_lu*2 - 1;			  // -1 or 1 for lower or upper wall
+	int i_lu_pm = i_lu*2 - 1;             // -1 or 1 for lower or upper wall
 	
 	//printf("Vel BC with wallAxis = %d and calcRho = %d\n", wallAxis, calcRho);
 
@@ -847,7 +852,7 @@ __kernel void boundary_velocity(
 #endif */
 }
 
-
+// Outdated kernel
 __kernel void collideSRT_newtonian_stream_D3Q19(
 	__global float* f_c,
 	__global float* f_s,
@@ -1021,54 +1026,94 @@ void guo_body_force_term(float u_x, float u_y, float u_z,
 }
 
 
-#ifdef CASSON
-float compute_tau(float srtII, __global float* nonNewtonianParams)
+float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global float* nonNewtonianParams)
 {
-	float sigma_y = nonNewtonianParams[0];
-	float eta_inf = nonNewtonianParams[1];
-	float m_c = 1E6;
-
-	//printf("sigma_y = %f\n", sigma_y);
-	//printf("eta_inf = %f\n", eta_inf);
-
-	float a_c = (sqrt(eta_inf) + (1-exp(-sqrt(m_c*srtII)))*sqrt(sigma_y/srtII));
-	float tau = 3.0f*a_c*a_c + 0.5f;
-
-	//float nu = (sqrt(sigma_y/srtII) + sqrt(eta_inf))*(sqrt(sigma_y/srtII) + sqrt(eta_inf));
-	//float tau = 3.0f*nu + 0.5f;
-
-	if (tau < MIN_TAU) {
-		tau = MIN_TAU;
-		printf("Warning: tau <= %f\n", tau);
+	float tau;
+	
+	if (viscosityModel == VISC_NEWTONIAN) {
+		tau = NewtonianTau;
 	}
-	//tau = tau > 100.0 ? 100.0 : tau;
-	//printf("Casson tau = %f\n", tau);
+	else if (viscosityModel == VISC_POWER_LAW) {
+	
+		float k = nonNewtonianParams[0];
+		float n = nonNewtonianParams[1];
+		float nu;
+		
+		//printf("Power law n = %f\n", n);
+		srtII = srtII > SRT_EPS ? srtII : SRT_EPS; // Make safe against division by zero
 
+		// Faster to check for common values than to use pow() always
+		if (n == 0.5f) {
+			nu = k/sqrt(srtII);
+		}
+		else if (n == 1.0f) {
+			nu = k;
+		}
+		else if (n == 2.0f) {
+			nu = k*srtII;
+		}
+		else {
+			nu = k*pow(srtII,n-1.0f);
+		}
+		
+		tau = 3.0f*nu + 0.5f;
+
+		//tau = tau > 100.0 ? 100.0 : tau;
+		if (tau < MIN_TAU) {
+			tau = MIN_TAU;
+			printf("Warning: tau <= %f\n", tau);
+		}
+		//printf("Power law tau = %f\n", tau);
+	}
+	else if (viscosityModel == VISC_CASSON) {
+		
+		float tau_Y = nonNewtonianParams[0];
+		float eta_inf = nonNewtonianParams[1];
+		//printf("Casson tau and eta = %f, %f\n", tau_Y, eta_inf);
+
+		srtII = srtII > SRT_EPS ? srtII : SRT_EPS; // Make safe against division by zero
+
+		float nu = (sqrt(tau_Y/srtII) + sqrt(eta_inf))*(sqrt(tau_Y/srtII) + sqrt(eta_inf));
+		tau = 3.0f*nu + 0.5f;
+
+		if (tau < MIN_TAU) {
+			tau = MIN_TAU;
+			printf("Warning: tau <= %f\n", tau);
+		}
+		//tau = tau > 100.0 ? 100.0 : tau;
+		//printf("Casson tau = %f\n", tau);
+		
+	}
+	else if (viscosityModel == VISC_HB) {
+		float tau_Y = nonNewtonianParams[0];
+		float k = nonNewtonianParams[1];
+		float n = nonNewtonianParams[2];
+		float nu;
+		
+		srtII = srtII > SRT_EPS ? srtII : SRT_EPS; // Make safe against division by zero
+		
+		if (n == 0.5f) {
+			nu = tau_Y/srtII + k/sqrt(srtII);
+		}
+		else if (n == 1.0f) {
+			nu = tau_Y/srtII + k;
+		}
+		else if (n == 2.0f) {
+			nu = tau_Y/srtII + k*srtII;
+		}
+		else {
+			nu = tau_Y/srtII + k*pow(srtII,n-1.0f);
+		}
+		
+		tau = 3.0f*nu + 0.5f;
+
+		//tau = tau > 100.0 ? 100.0 : tau;
+		if (tau < MIN_TAU) {
+			tau = MIN_TAU;
+			printf("Warning: tau <= %f\n", tau);
+		}
+		
+	}
+	
 	return tau;
 }
-
-#elif POWER_LAW
-float compute_tau(float srtII, __global float* nonNewtonianParams)
-{
-	float k = 0.001;
-	//float n = 0.5;
-
-	float nu = k/sqrt(srtII);
-	float tau = 3.0f*nu + 0.5f;
-
-	//tau = tau > 100.0 ? 100.0 : tau;
-	if (tau < MIN_TAU) {
-		tau = MIN_TAU;
-		printf("Warning: tau <= %f\n", tau);
-	}
-	//printf("Power law tau = %f\n", tau);
-
-	return tau;
-}
-
-#else
-float compute_tau(float srtII, __global float* nonNewtonianParams)
-{
-	return 1.0;
-}
-#endif

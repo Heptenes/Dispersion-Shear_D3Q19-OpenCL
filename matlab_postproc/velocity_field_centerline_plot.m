@@ -6,7 +6,7 @@ fName = 'velocity_field_centerline.txt';
 
 dataRead = dlmread(fName);
 
-dataSize = [65 126];
+dataSize = [32 32];
 circLoc = [40 32];
 
 xSurf = reshape(dataRead(:,4),dataSize);
@@ -17,7 +17,7 @@ fig_w = 1024;
 fig_h = 360;
 figure('Units','points','Position',[0 0 fig_w fig_h],'PaperPositionMode','auto');
 
-subplot(2,1,1)
+subplot(1,2,1)
 pcolor(0:(dataSize(2)-1), 0:(dataSize(1)-1), xSurf)
 shading interp
 colormap(cubehelix([],0.2,-1.4,1.8,1.0,[0,1],[1,0]))
@@ -31,7 +31,7 @@ ylabel(gca,'Z (lattice units)', 'Fontsize', 18, 'FontName', 'Clear Sans');
 xticks(0:16:192)
 yticks(0:16:92)
 
-subplot(2,1,2)
+subplot(1,2,2)
 pcolor(0:(dataSize(2)-1), 0:(dataSize(1)-1), zSurf)
 shading interp
 colormap(cubehelix([],0.2,-1.4,1.8,1.0,[0,1],[1,0]))

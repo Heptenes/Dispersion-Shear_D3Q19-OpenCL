@@ -6,9 +6,9 @@ fName = 'velocity_field_final.txt';
 
 dataRead = dlmread(['../' fName]);
 
-g = 0.0001;
+g = 0.00001;
             % x  y  
-systemSize = [23 23 23]; % Minus buffer layer
+systemSize = [6 6 126]; % Minus buffer layer
 
 profileDim = 3;
 velDim = 1;
@@ -22,7 +22,7 @@ h = w/2;
 z = 0:dz:w/2;
 
 % Newtonian
-tau = 1.0;
+tau = 1.232421875;
 nu = (tau-0.5)/3.0;
 %nu = 0.03;
 u_n = (0.5*g/nu)*((w/2)^2-z.^2);
@@ -41,18 +41,14 @@ u_pl = [fliplr(u_pl) u_pl(2:end)];
 
 % Casson
 % Casson flow profile
-nu_inf = 0.01;
+nu_inf = 0.1;
 sigma_y = 0.0005;
 z_y = sigma_y/g;
 
-C2 = -(1/nu_inf)*(-2.*sigma_y*(h-z_y) - 0.5*g*(h-z_y)^2 + (4/(3*g))*sqrt(sigma_y)*(sigma_y+g*(h-z_y))^(3/2));
-u_c = (1/nu_inf)*(-2.*sigma_y.*z - 0.5.*g.*z.^2 + (4/(3*g)).*sqrt(sigma_y).*(sigma_y+g.*z).^(3/2)) + C2;
-
 C3 = -(1/nu_inf)*(-0.5*g*h^2 + (4/3)*sqrt(g*sigma_y)*(h^(3/2)) - sigma_y*h);
-u_c3 = (1/nu_inf)*(-0.5.*g.*z.^2 + (4/3).*sqrt(g*sigma_y).*(z.^(3/2)) - sigma_y.*z) + C3;
+u_c = (1/nu_inf)*(-0.5.*g.*z.^2 + (4/3).*sqrt(g*sigma_y).*(z.^(3/2)) - sigma_y.*z) + C3;
 
 u_c = [fliplr(u_c) u_c(2:end)];
-u_c3 = [fliplr(u_c3) u_c3(2:end)];
 
 
 vLB = vel3D(1:(w+1),1,1)';
@@ -60,9 +56,8 @@ zr = dz:dz:systemSize(profileDim)-dz;
 
 plot(0.5:1:w+0.5, vLB-0.5*g, 'o');
 hold on;
-%plot(zr,u_n);
+plot(zr,u_n);
 %plot(zr,u_pl);
-plot(zr,u_c3, '-*');
-plot(zr,u_c, '-*');
+%plot(zr,u_c, '-*');
 
 grid on

@@ -121,9 +121,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, NULL);
 	gpf_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, NULL);
 	countPoint_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_int), NULL, NULL);
-	if (intDat.ViscosityModel != 0) {
-		tau_p_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, NULL);
-	}
+	tau_p_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, NULL);
 	error_check(err_cl, "clCreateBuffer 1", 1);
 
 	// Particle arrays
@@ -152,9 +150,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, gpf_cl, CL_TRUE, 0, a3DataSize*intDat.MaxSurfPointsPerNode, gpf_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, countPoint_cl, CL_TRUE, 0, numNodes*sizeof(cl_int), countPoint_h, 0, NULL, NULL);
-	if (intDat.ViscosityModel != 0) {
-		//err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, tau_p_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_p_h, 0, NULL, NULL);
-	}
+	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, tau_p_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_p_h, 0, NULL, NULL);
+
 	error_check(err_cl, "clEnqueueWriteBuffer 1", 1);
 	err_cl = CL_SUCCESS;
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, parFluidForceSum_cl, CL_TRUE, 0, numSurfPoints*sizeof(cl_float4)*2, parFluidForceSum, 0, NULL, NULL);
@@ -165,6 +162,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	error_check(err_cl, "clEnqueueWriteBuffer 2", 1);
 
 	// --- KERNEL RANGE SETTINGS -----------------------------------------------
+	int usingParticles = intDat.NumParticles > 0 ? 1 : 0;
 	// Offset global id by 1, because of buffer layer
 	size_t lattice_work_offset[3] = {1, 1, 1}; // Perf test this
 	size_t global_work_size[3];
@@ -295,31 +293,37 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			//error_check(err_cl, "clSetKernelArg", 1);
 		}
 
-		// Kernel: LB collide and stream
+		/* Kernel: LB collide and stream
 		for (size_t i_k = 0; i_k < splitKernelSize; i_k++) {
 
-			/* fluid_kernel_work_size[0] = global_work_size[0]/splitKernelSize;
+			fluid_kernel_work_size[0] = global_work_size[0]/splitKernelSize;
 			fluid_kernel_work_size[1] = global_work_size[1];
 			fluid_kernel_work_size[2] = global_work_size[2];
 			fluid_kernel_work_offset[0] = lattice_work_offset[0] + i_k*global_work_size[0]/splitKernelSize;
 			fluid_kernel_work_offset[1] = lattice_work_offset[1];
 			fluid_kernel_work_offset[2] = lattice_work_offset[2];
 			printf("Fluid kernel with global size %d %d %d\n", (int)fluid_kernel_work_size[0], (int)fluid_kernel_work_size[1], (int)fluid_kernel_work_size[2]);
-			printf("and work offset %d %d %d\n", (int)fluid_kernel_work_offset[0], (int)fluid_kernel_work_offset[1], (int)fluid_kernel_work_offset[2]); */
+			printf("and work offset %d %d %d\n", (int)fluid_kernel_work_offset[0], (int)fluid_kernel_work_offset[1], (int)fluid_kernel_work_offset[2]); 
 
 			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collideSRT_stream_D3Q19, 3,
-				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
-		}
+				gluid_kernel_work_offset, fluid_kernel_work_size, NULL, 0, NULL, NULL);
+		} */
+		
+		// Kernel: LB collide and stream
+		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collideSRT_stream_D3Q19, 3,
+			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
 		// Kernel: Particle update
-		//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
-		//	NULL, &numParThreads, NULL, 0, NULL, NULL);
+		if (usingParticles) {
+			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
+			NULL, &numParThreads, NULL, 0, NULL, NULL);
 
-		clFinish(*GPU_QueuePtr);
+			clFinish(*GPU_QueuePtr);
 
-		// Kernel: Reset particle-fluid force array
-		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.reset_particle_fluid_forces, 3,
+			// Kernel: Reset particle-fluid force array
+			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.reset_particle_fluid_forces, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+		}
 
 		// Kernel: Periodic stream
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_periodic, 1,
@@ -333,7 +337,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_velocity, 3,
 				lattice_work_offset, velBC_work_size, NULL, 0, NULL, NULL);
 			
-			// Additional velocity boundaries
+			// Additional tangential velocity boundaries (experimental)
 			for (int i = 0; i < 3; i++) {
 				if (hostDat->TangentialVelBC[i] == 1) {
 					//printf("Applying tangential velocity bounary on axis %d\n", i);
@@ -356,30 +360,30 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		}
 
 		// Kernel: Particle-fluid forces
-		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.particle_fluid_forces_linear_stencil, 1,
-			NULL, &numSurfPoints, &pointWorkSize, 0, NULL, NULL);
-		//printf("Checkpoint: particle_fluid_forces\n");
+		if (usingParticles) {
+			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.particle_fluid_forces_linear_stencil, 1,
+				NULL, &numSurfPoints, &pointWorkSize, 0, NULL, NULL);
 
-		clFinish(*GPU_QueuePtr);
+			clFinish(*GPU_QueuePtr);
 
-		// Kernel: Sum particle-fluid forces
-		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.sum_particle_fluid_forces, 3,
-			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+			// Kernel: Sum particle-fluid forces (acting on fluid)
+			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.sum_particle_fluid_forces, 3,
+				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
-		// Kernel: Particle-particle forces
-		//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
-		//	NULL, &numParThreads, NULL, 0, NULL, NULL);
-		//printf("Checkpoint: particle_particle_forces\n");
+			// Kernel: Particle-particle forces
+			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
+				NULL, &numParThreads, NULL, 0, NULL, NULL);
+		}
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
-		if (t%hostDat->RebuildFreq == 0) {
+		if (usingParticles && t%hostDat->RebuildFreq == 0) {
 			for (int i = 0; i < totalNumZones; i++) {
 				// Count is reset here because zones don't belong to threads
 				// May impact performance if large num of zones
 				numParInZone[i] = 0;
 			}
-			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
-			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
+			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
+				NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
 		//printf("Checkpoint: update_particle_zones\n");
 
@@ -406,14 +410,16 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 	write_lattice_field(u_h, &intDat);
 
-	float finalForce[3] = {0.0, 0.0, 0.0};
-	for (int i_fa = 0; i_fa < intDat.NumForceArrays; i_fa++) {
-		finalForce[0] += parFluidForce[i_fa].x;
-		finalForce[1] += parFluidForce[i_fa].y;
-		finalForce[2] += parFluidForce[i_fa].z;
-		printf("Final force += %f %f %f\n", parFluidForce[i_fa].x, parFluidForce[i_fa].y, parFluidForce[i_fa].z);
+	if (usingParticles) {
+		float finalForce[3] = {0.0, 0.0, 0.0};
+		for (int i_fa = 0; i_fa < intDat.NumForceArrays; i_fa++) {
+			finalForce[0] += parFluidForce[i_fa].x;
+			finalForce[1] += parFluidForce[i_fa].y;
+			finalForce[2] += parFluidForce[i_fa].z;
+			printf("Final force += %f %f %f\n", parFluidForce[i_fa].x, parFluidForce[i_fa].y, parFluidForce[i_fa].z);
+		}
+		printf("Final force on particle 1 = %f %f %f\n", finalForce[0], finalForce[1], finalForce[2]);
 	}
-	printf("Final force on particle 1 = %f %f %f\n", finalForce[0], finalForce[1], finalForce[2]);
 
 	// Cleanup
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);

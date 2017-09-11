@@ -625,9 +625,10 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 	int n_s = hostDat->FluidOutputSpacing; // for float division
 	int n_L = n_x*n_y*n_z;
 
-	int n_print = (int)(ceil(n_x/n_s)*ceil(n_y/n_s)*ceil(n_z/n_s));
+	int n_fluid = (int)(1+(n_x-3)/n_s)*(1+(n_y-3)/n_s)*(1+(n_z-3)/n_s);
+	int n_par = intDat->NumParticles;
 
-	fprintf(vidPtr, "%d\n", n_print);
+	fprintf(vidPtr, "%d\n", n_fluid+n_par);
 	fprintf(vidPtr, "D3Q19_output, frame %d\n", frame);
 
 	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x += n_s) {
@@ -637,6 +638,7 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
 
 				// Index, then velocity
+				fprintf(vidPtr, "1 "); // Fluid nodes type 1 
 				fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
 				fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
 
@@ -644,8 +646,19 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 		}
 	}
 
-
 	// Write particles
+	for (int p = 0; p < n_par; p++) {
+		
+		// Index, then velocity
+		fprintf(vidPtr, "2 "); // Particles type 2 
+		fprintf(vidPtr, "%.2f %.2f %.2f ", parKin[p].x, parKin[p].y, parKin[p].z);
+		fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", parKin[p+n_par].x, parKin[p+n_par].y, parKin[p+n_par].z);
+		
+	}
+
+
+	// Measure velocity gradient at wall
+	
 
 }
 
