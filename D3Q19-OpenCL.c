@@ -616,6 +616,40 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 }
 
 
+void compute_velocity_profile(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, int frame)
+{
+	// Write fluid
+	int n_x = intDat->LatticeSize[0];
+	int n_y = intDat->LatticeSize[1];
+	int n_z = intDat->LatticeSize[2];
+	int n_s = hostDat->FluidOutputSpacing; // for float division
+	int n_L = n_x*n_y*n_z;
+
+	int n_fluid = (int)(1+(n_x-3)/n_s)*(1+(n_y-3)/n_s)*(1+(n_z-3)/n_s);
+	int n_par = intDat->NumParticles;
+
+	fprintf(vidPtr, "%d\n", n_fluid+n_par);
+	fprintf(vidPtr, "D3Q19_output, frame %d\n", frame);
+
+	for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z++) {
+		//
+		float uMean = 0.0;
+		for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x++) {
+			for(int i_y=1; i_y < intDat->LatticeSize[1]-1; i_y++) {
+			
+				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
+
+				// Index, then velocity
+				fprintf(vidPtr, "1 "); // Fluid nodes type 1 
+				fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
+				fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
+
+			}
+		}
+	}
+}
+
+
 void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame)
 {
 	// Write fluid

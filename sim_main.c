@@ -398,6 +398,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			error_check(err_cl, "clEnqueueReadBuffer Video", 1);
 
 			continuous_output(hostDat, &intDat, u_h, parKin, vidPtr, t);
+			
+			compute_velocity_profile(hostDat, &intDat, u_h, t);
 		}
 
 	}

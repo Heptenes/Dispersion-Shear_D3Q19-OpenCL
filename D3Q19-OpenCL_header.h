@@ -138,6 +138,8 @@ int write_lattice_field(cl_float* u_h, int_param_struct* intDat);
 
 void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame);
 
+void compute_velocity_profile(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, int frame);
+
 int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices);
 
 int display_input_params(int_param_struct* intParams, flp_param_struct* floatParams);

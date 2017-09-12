@@ -150,18 +150,18 @@ __kernel void particle_dynamics(
 			accel += parFluidForce[p*nfa + fa]; // Force
 			//printf("Fluid-particle force    =  %f %f %f\n", accel.x, accel.y, accel.z);
 			angAccel += parFluidForce[(p+np)*nfa + fa]; // Torque
-			printf("Fluid-particle torque   = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
+			//printf("Fluid-particle torque   = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
 		}
 
 		// Add particle-particle force
 		accel += parForce[p];
 		angAccel += parForce[p + np];
 		//printf("Particle-particle force = %f %f %f\n", parForce[p].x, parForce[p].y, parForce[p].z);
-		printf("+ particle-particle torque   = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
+		//printf("+ particle-particle torque   = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
 
 		accel /= flpDat->ParticleMass;
 		angAccel /= flpDat->ParticleMomInertia; // Spheres
-		printf("ang accel   = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
+		//printf("ang accel   = %f %f %f\n", angAccel.x, angAccel.y, angAccel.z);
 		
 		// Add constant acceleration
 		accel.x += flpDat->ConstBodyForce[0]; // Need to move to vector implementation
