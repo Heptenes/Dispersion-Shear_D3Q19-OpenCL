@@ -239,8 +239,8 @@ __kernel void particle_fluid_forces_linear_stencil(
 
 		//printf("Force return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID, globalID);
 		//printf("= %f %f %f\n", parFluidForce[groupID].x, parFluidForce[groupID].y, parFluidForce[groupID].z);
-		printf("Torque return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
-		printf("= %f %f %f\n\n", parFluidForce[groupID + numGroups].x, parFluidForce[groupID + numGroups].y, parFluidForce[groupID + numGroups].z);
+		//printf("Torque return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
+		//printf("= %f %f %f\n\n", parFluidForce[groupID + numGroups].x, parFluidForce[groupID + numGroups].y, parFluidForce[groupID + numGroups].z);
 	}
 }
 
@@ -307,7 +307,7 @@ __kernel void collideMRT_stream_D3Q19(
 	__global float* f_s,
 	__global float* gpf,
 	__global float* u,
-	__global float* tau_p,
+	__global float* tau_lb,
 	__global int* countPointWrite,
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat) // Params could be const or local if supported
@@ -446,7 +446,7 @@ __kernel void collideMRT_stream_D3Q19(
 #else
 
 	// Compute local expression for shear rate tensor, using tau from previous time step
-	float tau = tau_p[i_1D];
+	float tau = tau_lb[i_1D];
 
 	s[8] = 1.0f/tau;  s[9] = 1.0f/tau; s[10] = 1.0f/tau;
 	s[14] = 1.0f/tau; s[15] = 1.0f/tau;
@@ -548,7 +548,7 @@ __kernel void collideMRT_stream_D3Q19(
 
 	// Tau redefinition for this time step
 	tau = compute_tau(intDat->ViscosityModel, srtII, flpDat->NewtonianTau, &(flpDat->ViscosityParams[0]));
-	tau_p[i_1D] = tau;
+	tau_lb[i_1D] = tau;
 	
 #endif // Tau computation
 

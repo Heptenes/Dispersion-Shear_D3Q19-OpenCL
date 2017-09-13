@@ -51,7 +51,8 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"ibm_interpolation_mode", TYPE_INT, &(hostDat->InterpOrderIBM), "1"},
 		{"direct_forcing_coeff", TYPE_FLOAT, &(flpDat->DirectForcingCoeff), "1.0"},
 		{"rebuild_neigh_list_freq", TYPE_INT, &(hostDat->RebuildFreq), "10"},
-		{"ovito_xyz_video_freq", TYPE_INT, &(hostDat->VideoFreq), "100"},
+		{"video_freq", TYPE_INT, &(hostDat->VideoFreq), "1000"},
+		{"shear_stress_freq", TYPE_INT, &(hostDat->ShearStressFreq), "1000"},
 		{"fluid_ouput_spacing", TYPE_INT, &(hostDat->FluidOutputSpacing), "1"}
 	};
 
@@ -101,7 +102,7 @@ int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_
 }
 
 void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-		cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h, cl_int* countPoint)
+		cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_lb_h, cl_int* countPoint)
 {
 	printf("%s %s\n", "Initial distribution type ", hostDat->InitialDist);
 
@@ -156,7 +157,7 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 	// Other fields
 	for(int i_n=0; i_n<NumNodes; i_n++) {
 
-		tau_p_h[i_n] = flpDat->NewtonianTau;
+		tau_lb_h[i_n] = flpDat->NewtonianTau;
 		countPoint[i_n] = 0;
 
 		for (int p = 0; p < intDat->MaxSurfPointsPerNode; p++) {
@@ -616,7 +617,7 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 }
 
 
-void compute_velocity_profile(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, int frame)
+void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float* tau_lb_h, int frame)
 {
 	// Write fluid
 	int n_x = intDat->LatticeSize[0];
@@ -624,31 +625,56 @@ void compute_velocity_profile(host_param_struct* hostDat, int_param_struct* intD
 	int n_z = intDat->LatticeSize[2];
 	int n_s = hostDat->FluidOutputSpacing; // for float division
 	int n_L = n_x*n_y*n_z;
+	
+	FILE* fPtr;
+	fPtr = fopen ("velocity_profile_z.txt","w");
+	
+	int buffer = 0; // Additional buffer to add before starting finite-difference derivatives
 
-	int n_fluid = (int)(1+(n_x-3)/n_s)*(1+(n_y-3)/n_s)*(1+(n_z-3)/n_s);
-	int n_par = intDat->NumParticles;
+	float n_xy = (float)(n_x-2)*(n_y-2);
+	
+	float* uMeanX;
+	uMeanX = (float*)calloc(n_z,sizeof(float));
 
-	fprintf(vidPtr, "%d\n", n_fluid+n_par);
-	fprintf(vidPtr, "D3Q19_output, frame %d\n", frame);
-
-	for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z++) {
+	for(int i_z=1; i_z < n_z-1; i_z++) {
 		//
-		float uMean = 0.0;
-		for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x++) {
-			for(int i_y=1; i_y < intDat->LatticeSize[1]-1; i_y++) {
+		float uMean[3] = {0.0f, 0.0f, 0.0f};
+		//
+		for(int i_x=1; i_x < n_x-1; i_x++) {
+			for(int i_y=1; i_y < n_y-1; i_y++) {
 			
 				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
+				
+				uMean[0] += u_h[i_1D];
+				uMean[1] += u_h[i_1D + n_L];
+				uMean[2] += u_h[i_1D + 2*n_L];
 
 				// Index, then velocity
-				fprintf(vidPtr, "1 "); // Fluid nodes type 1 
-				fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
-				fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
+				//fprintf(vidPtr, "1 "); // Fluid nodes type 1 
+				//fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
+				//fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
 
 			}
+		}		
+		uMean[0] /= n_xy; uMeanX[i_z] = uMean[0]; 
+		uMean[1] /= n_xy;
+		uMean[2] /= n_xy;
+		fprintf(fPtr, "%8.6f %8.6f %8.6f\n", uMean[0], uMean[1], uMean[2]);
+		
+		// Forwards difference from lower boundary
+		if (i_z == (2+buffer)) {
+			float dudz = uMeanX[i_z]-uMeanX[i_z-1];
+			printf("Shear rate (1st order) = %f\n", dudz);
 		}
+		if (i_z == (3+buffer)) {
+			float dudz = 0.5*(uMeanX[i_z]-uMeanX[i_z-2]);
+			printf("Shear rate (2nd order) = %f\n", dudz);
+		}
+		
 	}
-}
-
+	fclose(fPtr);
+} 
+ 
 
 void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame)
 {
@@ -665,9 +691,9 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 	fprintf(vidPtr, "%d\n", n_fluid+n_par);
 	fprintf(vidPtr, "D3Q19_output, frame %d\n", frame);
 
-	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x += n_s) {
-		for(int i_y=1; i_y < intDat->LatticeSize[1]-1; i_y += n_s) {
-			for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z += n_s) {
+	for(int i_x=1; i_x < n_x-1; i_x += n_s) {
+		for(int i_y=1; i_y < n_y-1; i_y += n_s) {
+			for(int i_z=1; i_z < n_z-1; i_z += n_s) {
 
 				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
 
@@ -1039,6 +1065,69 @@ int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq)
 	f_eq[18] = (rho/36.0f)*(1.0f + 3.0f*(-vy-vz) + 4.5f*(-vy-vz)*(-vy-vz) - 1.5f*vsq);
 
 	return 0;
+}
+
+float compute_tau(int viscosityModel, float srtII, cl_float NewtonianTau, cl_float* nonNewtonianParams)
+{
+	float tau;
+	
+	if (viscosityModel == VISC_NEWTONIAN) {
+		tau = NewtonianTau;
+	}
+	else if (viscosityModel == VISC_POWER_LAW) {
+	
+		float k = nonNewtonianParams[0];
+		float n = nonNewtonianParams[1];
+		float nu;
+
+		// Faster to check for common values than to use pow() always
+		if (n == 0.5f) {
+			nu = k/sqrt(srtII);
+		}
+		else if (n == 1.0f) {
+			nu = k;
+		}
+		else if (n == 2.0f) {
+			nu = k*srtII;
+		}
+		else {
+			nu = k*pow(srtII,n-1.0f);
+		}
+		
+		tau = 3.0f*nu + 0.5f;
+	}
+	else if (viscosityModel == VISC_CASSON) {
+		
+		float tau_Y = nonNewtonianParams[0];
+		float eta_inf = nonNewtonianParams[1];
+
+		float nu = (sqrt(tau_Y/srtII) + sqrt(eta_inf))*(sqrt(tau_Y/srtII) + sqrt(eta_inf));
+		tau = 3.0f*nu + 0.5f;
+		
+	}
+	else if (viscosityModel == VISC_HB) {
+		float tau_Y = nonNewtonianParams[0];
+		float k = nonNewtonianParams[1];
+		float n = nonNewtonianParams[2];
+		float nu;
+		
+		if (n == 0.5f) {
+			nu = tau_Y/srtII + k/sqrt(srtII);
+		}
+		else if (n == 1.0f) {
+			nu = tau_Y/srtII + k;
+		}
+		else if (n == 2.0f) {
+			nu = tau_Y/srtII + k*srtII;
+		}
+		else {
+			nu = tau_Y/srtII + k*pow(srtII,n-1.0f);
+		}
+		
+		tau = 3.0f*nu + 0.5f;
+	}
+	
+	return tau;
 }
 
 void read_program_source(char** programSourcePtr, const char* programName)

@@ -84,7 +84,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	cl_float* u_h = (cl_float*)malloc(a3DataSize);
 	cl_float* gpf_h = (cl_float*)malloc(a3DataSize*intDat.MaxSurfPointsPerNode);
 	cl_int* countPoint_h = (cl_int*)malloc(numNodes*sizeof(cl_uint));
-	cl_float* tau_p_h = (cl_float*)malloc(numNodes*sizeof(cl_float));
+	cl_float* tau_lb_h = (cl_float*)malloc(numNodes*sizeof(cl_float));
 	// Particle arrays
 	cl_float4* parKin = (cl_float4*)malloc(parV4DataSize*4); // x, vel, rot (quaternion), ang vel
 	cl_float4* parForce = (cl_float4*)malloc(parV4DataSize*2); // Force and torque
@@ -99,7 +99,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	cl_uint* numParInZone;
 
 	// Initialization
-	initialize_lattice_fields(hostDat, &intDat, &flpDat, f_h, gpf_h, u_h, tau_p_h, countPoint_h);
+	initialize_lattice_fields(hostDat, &intDat, &flpDat, f_h, gpf_h, u_h, tau_lb_h, countPoint_h);
 	initialize_particle_fields(hostDat, &intDat, &flpDat, parKin, parForce, &parFluidForce);
 	initialize_particle_zones(hostDat, &intDat, &flpDat, parKin, parsZone, &zoneMembers, &numParInZone, threadMembers, numParInThread, &zoneDat);
 	size_t totalNumZones = intDat.NumZones[0]*intDat.NumZones[1]*intDat.NumZones[2];
@@ -121,7 +121,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, NULL);
 	gpf_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, NULL);
 	countPoint_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_int), NULL, NULL);
-	tau_p_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, NULL);
+	tau_lb_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, NULL);
 	error_check(err_cl, "clCreateBuffer 1", 1);
 
 	// Particle arrays
@@ -150,7 +150,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, gpf_cl, CL_TRUE, 0, a3DataSize*intDat.MaxSurfPointsPerNode, gpf_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, countPoint_cl, CL_TRUE, 0, numNodes*sizeof(cl_int), countPoint_h, 0, NULL, NULL);
-	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, tau_p_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_p_h, 0, NULL, NULL);
+	err_cl |= clEnqueueWriteBuffer(*GPU_QueuePtr, tau_lb_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_lb_h, 0, NULL, NULL);
 
 	error_check(err_cl, "clEnqueueWriteBuffer 1", 1);
 	err_cl = CL_SUCCESS;
@@ -198,7 +198,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 2, memSize, &gpf_cl);
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 3, memSize, &u_cl);
-	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 4, memSize, &tau_p_cl);
+	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 4, memSize, &tau_lb_cl);
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 5, memSize, &countPoint_cl);
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 6, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 7, memSize, &flpDat_cl);
@@ -392,14 +392,20 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		// Update dynamic parameters, e.g shear boundaries
 
-		// Produce video output
+		// Produce video output and/or analysis
 		if (t%hostDat->VideoFreq == 0) {
 			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 			error_check(err_cl, "clEnqueueReadBuffer Video", 1);
 
 			continuous_output(hostDat, &intDat, u_h, parKin, vidPtr, t);
+		}
+		if (t%hostDat->ShearStressFreq == 0) {
+			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
+			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, tau_lb_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_lb_h, 0, NULL, NULL);
+			error_check(err_cl, "clEnqueueReadBuffer Shear stress", 1);
 			
-			compute_velocity_profile(hostDat, &intDat, u_h, t);
+			compute_shear_stress(hostDat, &intDat, u_h, tau_lb_h, t);
+			
 		}
 
 	}

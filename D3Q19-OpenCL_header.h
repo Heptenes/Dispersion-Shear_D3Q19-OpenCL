@@ -9,6 +9,7 @@
 #include <CL/cl.h>
 #endif
 
+
 #define TYPE_INT 0
 #define TYPE_FLOAT 1
 #define TYPE_INT_3VEC 2
@@ -18,6 +19,11 @@
 
 #define BC_PERIODIC 0
 #define BC_VELOCITY 1
+
+#define VISC_NEWTONIAN 1
+#define VISC_POWER_LAW 2
+#define VISC_HB 3
+#define VISC_CASSON 4
 
 #define WORD_STRING_SIZE 64
 
@@ -48,7 +54,7 @@
 	X(u_cl) \
 	X(gpf_cl) \
 	X(countPoint_cl) \
-	X(tau_p_cl) \
+	X(tau_lb_cl) \
 	X(parKin_cl) \
 	X(parForce_cl) \
 	X(parFluidForce_cl) \
@@ -83,6 +89,7 @@ typedef struct {
 	int VideoFreq;
 	int FluidOutputSpacing;
 	int TangentialVelBC[3];
+	int ShearStressFreq;
 
 } host_param_struct;
 
@@ -117,7 +124,7 @@ int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams, 
 int parameter_checking(int_param_struct* intDat, flp_param_struct* flpDat, host_param_struct* hostDat);
 
 void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_p_h, cl_int* countPoint);
+	cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_lb_h, cl_int* countPoint);
 
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float4* parKinematics, cl_float4* parForce, cl_float4** parFluidForce);
@@ -127,6 +134,8 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	cl_uint* numParsInThread, zone_struct** zoneDat);
 
 int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq);
+
+float compute_tau(int viscosityModel, float srtII, cl_float NewtonianTau, cl_float* nonNewtonianParams);
 
 int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputDefaultSize);
 
@@ -138,7 +147,7 @@ int write_lattice_field(cl_float* u_h, int_param_struct* intDat);
 
 void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame);
 
-void compute_velocity_profile(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, int frame);
+void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float* tau_lb_h, int frame);
 
 int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices);
 
