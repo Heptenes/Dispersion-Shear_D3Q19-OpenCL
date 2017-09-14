@@ -11,8 +11,6 @@
 
 //#include "struct_header_device.h"
 
-#define PAR_COL_HARMONIC 1
-#define PAR_COL_LJ 2
 
 #define VISC_NEWTONIAN 1
 #define VISC_POWER_LAW 2

@@ -26,11 +26,12 @@ int main(int argc, char *argv[])
 
 	// Run LB calculation
 	int returnLB = simulation_main(&hostDat, devices, &queueCPU, &queueGPU, &context);
+	printf("LB returned %d\n", returnLB);
 
 	// Clean-up
 	clReleaseCommandQueue(queueCPU);
 	clReleaseCommandQueue(queueGPU);
-	clReleaseContext(context);
+	//clReleaseContext(context);
 
 	return 0;
 }
@@ -328,8 +329,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		// Kernel: Particle update
 		if (usingParticles) {
-			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
-				NULL, &numParThreads, NULL, 0, NULL, NULL);
+			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
+			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
 
 			clFinish(*CPU_QueuePtr);
 			clFinish(*GPU_QueuePtr);
@@ -391,17 +392,20 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
 		if (usingParticles && t%hostDat->RebuildFreq == 0) {
+			
 			numParInZone_h = clEnqueueMapBuffer(*CPU_QueuePtr, numParInZone_cl, CL_TRUE, CL_MAP_WRITE, 0, totalNumZones*sizeof(cl_int), 0, NULL, NULL, &err_cl);
+			error_check(err_cl, "clEnqueueMapBuffer", 1);
 			
 			for (int i = 0; i < totalNumZones; i++) {
 				// Count is reset here because zones don't belong to threads
 				// May impact performance if large num of zones
 				numParInZone_h[i] = 0;
 			}
+			clEnqueueUnmapMemObject(*CPU_QueuePtr, numParInZone_cl, numParInZone_h, 0, NULL, NULL);
 			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
 				NULL, &numParThreads, NULL, 0, NULL, NULL);
 			clFinish(*CPU_QueuePtr);
-			clEnqueueUnmapMemObject(*CPU_QueuePtr, numParInZone_cl, numParInZone_h, 0, NULL, NULL);
+			
 		}
 
 		clFinish(*GPU_QueuePtr); // So forces are updated
@@ -426,35 +430,44 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		}
 
 	}
+	clFinish(*GPU_QueuePtr); 
+	clFinish(*CPU_QueuePtr);
 	printf("Checkpoint: end of simulation loop\n");
 
 	// --- COPY DATA TO HOST ---------------------------------------------------
 	// Velocity
-	err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
-	error_check(err_cl, "clEnqueueReadBuffer", 1);
+	//err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
+	//error_check(err_cl, "clEnqueueReadBuffer", 1);
 
-	write_lattice_field(u_h, &intDat);
+	//write_lattice_field(u_h, &intDat);
 
-	/*
+	
 	if (usingParticles) {
+		
+		parFluidForce_h = clEnqueueMapBuffer(*CPU_QueuePtr, 
+			parFluidForce_cl, CL_TRUE, CL_MAP_WRITE, 0, parV4DataSize*intDat.NumForceArrays*2, 0, NULL, NULL, &err_cl);
+		error_check(err_cl, "clEnqueueMapBuffer", 1);
+		
 		float finalForce[3] = {0.0, 0.0, 0.0};
 		for (int i_fa = 0; i_fa < intDat.NumForceArrays; i_fa++) {
-			finalForce[0] += parFluidForce[i_fa].x;
-			finalForce[1] += parFluidForce[i_fa].y;
-			finalForce[2] += parFluidForce[i_fa].z;
-			printf("Final force += %f %f %f\n", parFluidForce[i_fa].x, parFluidForce[i_fa].y, parFluidForce[i_fa].z);
+			finalForce[0] += parFluidForce_h[i_fa].x;
+			finalForce[1] += parFluidForce_h[i_fa].y;
+			finalForce[2] += parFluidForce_h[i_fa].z;
+			printf("Final force += %f %f %f\n", parFluidForce_h[i_fa].x, parFluidForce_h[i_fa].y, parFluidForce_h[i_fa].z);
 		}
 		printf("Final force on particle 1 = %f %f %f\n", finalForce[0], finalForce[1], finalForce[2]);
-	} */
+	} 
+	clFinish(*CPU_QueuePtr);
+	printf("Checkpoint: end of output\n");
 
-	// Cleanup
+	/* Cleanup
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);
 	LIST_OF_KERNELS
 #undef X
 
 #define X(memName) clReleaseMemObject(memName);
 	LIST_OF_CL_MEM
-#undef X
+#undef X */
 
 	return 0;
 }
