@@ -44,8 +44,6 @@ typedef struct {
 	int TotalSurfPoints;
 	int NumForceArrays;
 
-	int RebuildFreq;
-
 } int_param_struct;
 
 
@@ -73,10 +71,6 @@ typedef struct {
 
 } flp_param_struct;
 
-typedef struct {
-	int NumNeighbors;
-	int NeighborZones[26];
-} zone_struct;
 
 void equilibirum_distribution_D3Q19(float* f_eq, float rho, float u_x, float u_y, float u_z);
 void stream_locations(int n_x, int n_y, int n_z, int i_x, int i_y, int i_z, int* ind);
@@ -549,7 +543,7 @@ __kernel void collideMRT_stream_D3Q19(
 	// Tau redefinition for this time step
 	tau = compute_tau(intDat->ViscosityModel, srtII, flpDat->NewtonianTau, &(flpDat->ViscosityParams[0]));
 	tau_lb[i_1D] = tau;
-	
+
 #endif // Tau computation
 
 	// Recalcualate s
@@ -738,7 +732,7 @@ __kernel void boundary_velocity(
 	i_3[2] = get_global_id(2);
 	int i_lu = get_global_id(wallAxis)-1; //  0 or 1 for lower or upper wall
 	int i_lu_pm = i_lu*2 - 1;             // -1 or 1 for lower or upper wall
-	
+
 	//printf("Vel BC with wallAxis = %d and calcRho = %d\n", wallAxis, calcRho);
 
 	int N[3];
@@ -810,7 +804,7 @@ __kernel void boundary_velocity(
 
 	// Calculate rho
 	float rho;
-	
+
 	// Shouldn't be any performance loss from if statement if all threads doing the same thing
 	if (calcRho) {
 		rho = (f_k[0]+f_k[1]+f_k[2]+f_k[3]+f_k[4]+f_k[5]+f_k[6]+f_k[7]+f_k[8]
@@ -1030,16 +1024,16 @@ void guo_body_force_term(float u_x, float u_y, float u_z,
 float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global float* nonNewtonianParams)
 {
 	float tau;
-	
+
 	if (viscosityModel == VISC_NEWTONIAN) {
 		tau = NewtonianTau;
 	}
 	else if (viscosityModel == VISC_POWER_LAW) {
-	
+
 		float k = nonNewtonianParams[0];
 		float n = nonNewtonianParams[1];
 		float nu;
-		
+
 		//printf("Power law n = %f\n", n);
 		srtII = srtII > SRT_EPS ? srtII : SRT_EPS; // Make safe against division by zero
 
@@ -1056,7 +1050,7 @@ float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global 
 		else {
 			nu = k*pow(srtII,n-1.0f);
 		}
-		
+
 		tau = 3.0f*nu + 0.5f;
 
 		//tau = tau > 100.0 ? 100.0 : tau;
@@ -1067,7 +1061,7 @@ float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global 
 		//printf("Power law tau = %f\n", tau);
 	}
 	else if (viscosityModel == VISC_CASSON) {
-		
+
 		float tau_Y = nonNewtonianParams[0];
 		float eta_inf = nonNewtonianParams[1];
 		//printf("Casson tau and eta = %f, %f\n", tau_Y, eta_inf);
@@ -1083,16 +1077,16 @@ float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global 
 		}
 		//tau = tau > 100.0 ? 100.0 : tau;
 		//printf("Casson tau = %f\n", tau);
-		
+
 	}
 	else if (viscosityModel == VISC_HB) {
 		float tau_Y = nonNewtonianParams[0];
 		float k = nonNewtonianParams[1];
 		float n = nonNewtonianParams[2];
 		float nu;
-		
+
 		srtII = srtII > SRT_EPS ? srtII : SRT_EPS; // Make safe against division by zero
-		
+
 		if (n == 0.5f) {
 			nu = tau_Y/srtII + k/sqrt(srtII);
 		}
@@ -1105,7 +1099,7 @@ float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global 
 		else {
 			nu = tau_Y/srtII + k*pow(srtII,n-1.0f);
 		}
-		
+
 		tau = 3.0f*nu + 0.5f;
 
 		//tau = tau > 100.0 ? 100.0 : tau;
@@ -1113,8 +1107,8 @@ float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global 
 			tau = MIN_TAU;
 			printf("Warning: tau <= %f\n", tau);
 		}
-		
+
 	}
-	
+
 	return tau;
 }

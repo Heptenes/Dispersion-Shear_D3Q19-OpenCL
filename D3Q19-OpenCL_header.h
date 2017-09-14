@@ -9,7 +9,6 @@
 #include <CL/cl.h>
 #endif
 
-
 #define TYPE_INT 0
 #define TYPE_FLOAT 1
 #define TYPE_INT_3VEC 2
@@ -35,7 +34,7 @@
 
 // X-macros
 #define LIST_OF_KERNELS \
-	X(collideSRT_stream_D3Q19) \
+	X(collide_stream) \
 	X(boundary_velocity) \
 	X(boundary_periodic) \
 	X(particle_dynamics) \

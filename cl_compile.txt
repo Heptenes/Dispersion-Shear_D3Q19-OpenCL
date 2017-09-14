@@ -1,1 +1,7 @@
 cl D3Q19-OpenCL_main.c OpenCL.lib /I "C:\Program Files (x86)\AMD APP SDK\3.0\include" /link /LIBPATH:"C:\Program Files (x86)\AMD APP SDK\3.0\lib\x86"
+
+
+OR
+
+
+cl D3Q19-OpenCL.c opencl.lib /I "$env:OCL_ROOT\include" /link /LIBPATH:"$env:OCL_ROOT\lib\x86"

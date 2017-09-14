@@ -116,32 +116,35 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 #undef X
 	// Lattice fields
 	cl_int err_cl = CL_SUCCESS;
-	fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, NULL);
+	fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, &err_cl);
 	fB_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, &err_cl);
-	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, NULL);
-	gpf_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, NULL);
-	countPoint_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_int), NULL, NULL);
-	tau_lb_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, NULL);
+	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, &err_cl);
+	gpf_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, &err_cl);
+	countPoint_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_int), NULL, &err_cl);
+	tau_lb_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer 1", 1);
 
 	// Particle arrays
-	parKin_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*4, parKin, NULL);
-	parForce_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*2, parForce, NULL);
-	parFluidForce_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*intDat.NumForceArrays*2, parFluidForce, NULL);
-	parFluidForceSum_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numSurfPoints*sizeof(cl_float4)*2, NULL, NULL);
-	parsZone_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, intDat.NumParticles*sizeof(cl_int), parsZone, NULL);
-	zoneMembers_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, totalNumZones*intDat.NumParticles*sizeof(cl_int), zoneMembers, NULL);
-	numParInZone_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, totalNumZones*sizeof(cl_int), numParInZone, NULL);
+	err_cl = CL_SUCCESS;
+	parKin_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*4, parKin, &err_cl);
+	parForce_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*2, parForce, &err_cl);
+	parFluidForce_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, parV4DataSize*intDat.NumForceArrays*2, parFluidForce, &err_cl);
+	parFluidForceSum_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numSurfPoints*sizeof(cl_float4)*2, NULL, &err_cl);
+	parsZone_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, intDat.NumParticles*sizeof(cl_int), parsZone, &err_cl);
+	zoneMembers_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, totalNumZones*intDat.NumParticles*sizeof(cl_int), zoneMembers, &err_cl);
+	numParInZone_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, totalNumZones*sizeof(cl_int), numParInZone, &err_cl);
+	error_check(err_cl, "clCreateBuffer 2", 1);
 
 	// Read-only buffers
-	intDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(int_param_struct), NULL, NULL);
-	flpDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(flp_param_struct), NULL, NULL);
-	strMap_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, smDataSize, NULL, NULL);
-	threadMembers_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, intDat.NumParticles*sizeof(cl_int), threadMembers, NULL);
-	numParInThread_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, numParThreads*sizeof(cl_int), numParInThread, NULL);
-	zoneDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, totalNumZones*sizeof(zone_struct), zoneDat, NULL);
-	spherePoints_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, intDat.PointsPerParticle*sizeof(cl_float4), NULL, NULL);
-
+	err_cl = CL_SUCCESS;
+	intDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(int_param_struct), NULL, &err_cl);
+	flpDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(flp_param_struct), NULL, &err_cl);
+	strMap_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, smDataSize, NULL, &err_cl);
+	threadMembers_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, intDat.NumParticles*sizeof(cl_int), threadMembers, &err_cl);
+	numParInThread_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, numParThreads*sizeof(cl_int), numParInThread, &err_cl);
+	zoneDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, totalNumZones*sizeof(zone_struct), zoneDat, &err_cl);
+	spherePoints_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, intDat.PointsPerParticle*sizeof(cl_float4), NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer 3", 1);
 
 	// --- WRITE BUFFERS --------------------------------------------------------
 	err_cl = CL_SUCCESS;
@@ -169,7 +172,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	size_t velBC_work_size[3];
 	size_t tanBC_work_size[3];
 	cl_int wallAxis=0; cl_int tanAxis=0;
-	cl_int calcRho=1; cl_int tanCalcRho=0; 
+	cl_int calcRho=1; cl_int tanCalcRho=0;
 
 	// Work sizes
 	int velBoundary=0;
@@ -196,12 +199,12 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	size_t memSize = sizeof(cl_mem);
 	err_cl = CL_SUCCESS;
 
-	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 2, memSize, &gpf_cl);
-	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 3, memSize, &u_cl);
-	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 4, memSize, &tau_lb_cl);
-	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 5, memSize, &countPoint_cl);
-	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 6, memSize, &intDat_cl);
-	err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 7, memSize, &flpDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.collide_stream, 2, memSize, &gpf_cl);
+	err_cl |= clSetKernelArg(kernelDat.collide_stream, 3, memSize, &u_cl);
+	err_cl |= clSetKernelArg(kernelDat.collide_stream, 4, memSize, &tau_lb_cl);
+	err_cl |= clSetKernelArg(kernelDat.collide_stream, 5, memSize, &countPoint_cl);
+	err_cl |= clSetKernelArg(kernelDat.collide_stream, 6, memSize, &intDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.collide_stream, 7, memSize, &flpDat_cl);
 
 	err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 1, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 2, memSize, &flpDat_cl);
@@ -279,15 +282,15 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		// Switch f buffers
 		if (t%2 == 0) {
-			err_cl  = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fA_cl);
-			err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 1, memSize, &fB_cl);
+			err_cl  = clSetKernelArg(kernelDat.collide_stream, 0, memSize, &fA_cl);
+			err_cl |= clSetKernelArg(kernelDat.collide_stream, 1, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fB_cl);
 			//error_check(err_cl, "clSetKernelArg", 1);
 		}
 		else {
-			err_cl  = clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 0, memSize, &fB_cl);
-			err_cl |= clSetKernelArg(kernelDat.collideSRT_stream_D3Q19, 1, memSize, &fA_cl);
+			err_cl  = clSetKernelArg(kernelDat.collide_stream, 0, memSize, &fB_cl);
+			err_cl |= clSetKernelArg(kernelDat.collide_stream, 1, memSize, &fA_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fA_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fA_cl);
 			//error_check(err_cl, "clSetKernelArg", 1);
@@ -303,40 +306,50 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			fluid_kernel_work_offset[1] = lattice_work_offset[1];
 			fluid_kernel_work_offset[2] = lattice_work_offset[2];
 			printf("Fluid kernel with global size %d %d %d\n", (int)fluid_kernel_work_size[0], (int)fluid_kernel_work_size[1], (int)fluid_kernel_work_size[2]);
-			printf("and work offset %d %d %d\n", (int)fluid_kernel_work_offset[0], (int)fluid_kernel_work_offset[1], (int)fluid_kernel_work_offset[2]); 
+			printf("and work offset %d %d %d\n", (int)fluid_kernel_work_offset[0], (int)fluid_kernel_work_offset[1], (int)fluid_kernel_work_offset[2]);
 
-			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collideSRT_stream_D3Q19, 3,
+			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collide_stream, 3,
 				gluid_kernel_work_offset, fluid_kernel_work_size, NULL, 0, NULL, NULL);
 		} */
-		
+
 		// Kernel: LB collide and stream
-		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collideSRT_stream_D3Q19, 3,
+		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.collide_stream, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+			printf(" >>>>>>>>>>>>>>>>>> Checkpoint <<<<<<<<<<<<<<<<< \n");
 
 		// Kernel: Particle update
 		if (usingParticles) {
 			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
-			NULL, &numParThreads, NULL, 0, NULL, NULL);
+				NULL, &numParThreads, NULL, 0, NULL, NULL);
 
+				printf(" >>>>>>>>>>>>>>>>>> Checkpoint <<<<<<<<<<<<<<<<< \n");
+
+			clFinish(*CPU_QueuePtr);
 			clFinish(*GPU_QueuePtr);
 
 			// Kernel: Reset particle-fluid force array
 			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.reset_particle_fluid_forces, 3,
-			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+
+				printf(" >>>>>>>>>>>>>>>>>> Checkpoint <<<<<<<<<<<<<<<<< \n");
 		}
 
 		// Kernel: Periodic stream
 		clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_periodic, 1,
 			NULL, &periodic_work_size, NULL, 0, NULL, NULL);
 
+			printf(" >>>>>>>>>>>>>>>>>> Checkpoint <<<<<<<<<<<<<<<<< \n");
+
 		clFinish(*GPU_QueuePtr);
 		clFinish(*CPU_QueuePtr);
+
+		printf(" >>>>>>>>>>>>>>>>>> Checkpoint <<<<<<<<<<<<<<<<< \n");
 
 		// Kernel: LB velocity boundary
 		if (velBoundary) {
 			clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_velocity, 3,
 				lattice_work_offset, velBC_work_size, NULL, 0, NULL, NULL);
-			
+
 			// Additional tangential velocity boundaries (experimental)
 			for (int i = 0; i < 3; i++) {
 				if (hostDat->TangentialVelBC[i] == 1) {
@@ -345,13 +358,13 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 					tanBC_work_size[(i+1)%3] = intDat.LatticeSize[(i+1)%3]-2;
 					tanBC_work_size[(i+2)%3] = intDat.LatticeSize[(i+2)%3]-2;
 					tanAxis = i;
-					
+
 					clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &tanAxis);
 					clSetKernelArg(kernelDat.boundary_velocity, 4, sizeof(cl_int), &tanCalcRho);
-					
+
 					clEnqueueNDRangeKernel(*GPU_QueuePtr, kernelDat.boundary_velocity, 3,
 						lattice_work_offset, tanBC_work_size, NULL, 0, NULL, NULL);
-						
+
 				}
 			}
 			clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &wallAxis);
@@ -371,8 +384,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
 			// Kernel: Particle-particle forces
-			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
-				NULL, &numParThreads, NULL, 0, NULL, NULL);
+			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
+			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
@@ -385,7 +398,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
 				NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
-		//printf("Checkpoint: update_particle_zones\n");
+
 
 		clFinish(*GPU_QueuePtr); // So forces are updated
 		clFinish(*CPU_QueuePtr);
@@ -403,9 +416,9 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, tau_lb_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_lb_h, 0, NULL, NULL);
 			error_check(err_cl, "clEnqueueReadBuffer Shear stress", 1);
-			
+
 			compute_shear_stress(hostDat, &intDat, u_h, tau_lb_h, t);
-			
+
 		}
 
 	}

@@ -448,8 +448,7 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 
 	// Select kernels from program
 	// GPU
-	kernelDat->collideSRT_stream_D3Q19 = clCreateKernel(programGPU, "collideMRT_stream_D3Q19", &error);
-	if (!error_check(error, "clCreateKernel GPU_collide_stream", 1))
+	if (!error_check(error, "clCreateKernel collideMRT_stream_D3Q19", 1))
 		print_program_build_log(&programGPU, &devices[1]);
 
 	kernelDat->boundary_velocity = clCreateKernel(programGPU, "boundary_velocity", &error);
@@ -461,28 +460,28 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 		print_program_build_log(&programGPU, &devices[1]);
 
 	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(programGPU, "particle_fluid_forces_linear_stencil", &error);
-	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
+	if (!error_check(error, "clCreateKernel fluid_particle_forces_linear_stencil", 1))
 		print_program_build_log(&programGPU, &devices[1]);
 
 	kernelDat->sum_particle_fluid_forces = clCreateKernel(programGPU, "sum_particle_fluid_forces", &error);
-	if (!error_check(error, "sum_particle_fluid_forces", 1))
+	if (!error_check(error, "clCreateKernel sum_particle_fluid_forces", 1))
 		print_program_build_log(&programGPU, &devices[1]);
 
 	kernelDat->reset_particle_fluid_forces = clCreateKernel(programGPU, "reset_particle_fluid_forces", &error);
-	if (!error_check(error, "reset_particle_fluid_forces", 1))
+	if (!error_check(error, "clCreateKernel reset_particle_fluid_forces", 1))
 		print_program_build_log(&programGPU, &devices[1]);
 
 	// CPU
 	kernelDat->particle_dynamics = clCreateKernel(programCPU, "particle_dynamics", &error);
-	if (!error_check(error, "fluid_particle_forces_linear_stencil", 1))
+	if (!error_check(error, "clCreateKernel particle_dynamics", 1))
 		print_program_build_log(&programCPU, &devices[0]);
 
 	kernelDat->particle_particle_forces = clCreateKernel(programCPU, "particle_particle_forces", &error);
-	if (!error_check(error, "particle_particle_forces", 1))
+	if (!error_check(error, "clCreateKernel particle_particle_forces", 1))
 		print_program_build_log(&programCPU, &devices[0]);
 
 	kernelDat->update_particle_zones = clCreateKernel(programCPU, "update_particle_zones", &error);
-	if (!error_check(error, "update_particle_zones", 1))
+	if (!error_check(error, "clCreateKernel update_particle_zones", 1))
 		print_program_build_log(&programCPU, &devices[0]);
 
 	size_t actualWorkGrpSize;
@@ -625,14 +624,14 @@ void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, 
 	int n_z = intDat->LatticeSize[2];
 	int n_s = hostDat->FluidOutputSpacing; // for float division
 	int n_L = n_x*n_y*n_z;
-	
+
 	FILE* fPtr;
 	fPtr = fopen ("velocity_profile_z.txt","w");
-	
+
 	int buffer = 0; // Additional buffer to add before starting finite-difference derivatives
 
 	float n_xy = (float)(n_x-2)*(n_y-2);
-	
+
 	float* uMeanX;
 	uMeanX = (float*)calloc(n_z,sizeof(float));
 
@@ -642,25 +641,25 @@ void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, 
 		//
 		for(int i_x=1; i_x < n_x-1; i_x++) {
 			for(int i_y=1; i_y < n_y-1; i_y++) {
-			
+
 				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
-				
+
 				uMean[0] += u_h[i_1D];
 				uMean[1] += u_h[i_1D + n_L];
 				uMean[2] += u_h[i_1D + 2*n_L];
 
 				// Index, then velocity
-				//fprintf(vidPtr, "1 "); // Fluid nodes type 1 
+				//fprintf(vidPtr, "1 "); // Fluid nodes type 1
 				//fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
 				//fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
 
 			}
-		}		
-		uMean[0] /= n_xy; uMeanX[i_z] = uMean[0]; 
+		}
+		uMean[0] /= n_xy; uMeanX[i_z] = uMean[0];
 		uMean[1] /= n_xy;
 		uMean[2] /= n_xy;
 		fprintf(fPtr, "%8.6f %8.6f %8.6f\n", uMean[0], uMean[1], uMean[2]);
-		
+
 		// Forwards difference from lower boundary
 		if (i_z == (2+buffer)) {
 			float dudz = uMeanX[i_z]-uMeanX[i_z-1];
@@ -670,11 +669,11 @@ void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, 
 			float dudz = 0.5*(uMeanX[i_z]-uMeanX[i_z-2]);
 			printf("Shear rate (2nd order) = %f\n", dudz);
 		}
-		
+
 	}
 	fclose(fPtr);
-} 
- 
+}
+
 
 void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame)
 {
@@ -698,7 +697,7 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
 
 				// Index, then velocity
-				fprintf(vidPtr, "1 "); // Fluid nodes type 1 
+				fprintf(vidPtr, "1 "); // Fluid nodes type 1
 				fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
 				fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
 
@@ -708,17 +707,17 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 
 	// Write particles
 	for (int p = 0; p < n_par; p++) {
-		
+
 		// Index, then velocity
-		fprintf(vidPtr, "2 "); // Particles type 2 
+		fprintf(vidPtr, "2 "); // Particles type 2
 		fprintf(vidPtr, "%.2f %.2f %.2f ", parKin[p].x, parKin[p].y, parKin[p].z);
 		fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", parKin[p+n_par].x, parKin[p+n_par].y, parKin[p+n_par].z);
-		
+
 	}
 
 
 	// Measure velocity gradient at wall
-	
+
 
 }
 
@@ -852,17 +851,18 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 	}
 
 	// Print GPU information
+	cl_uint* numCompUnits = (cl_uint*)calloc(numGPUs, sizeof(cl_uint));
 	for(int i=0; i < (int)numGPUs; i++)
 	{
 		char buf_name[1024];
-		cl_uint buf_cu, buf_freq;
+		cl_uint buf_freq;
 		cl_ulong buf_mem;
 
 		printf("GPU info, num. %i\n", i);
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_NAME, sizeof(buf_name), buf_name, NULL);
 		printf("DEVICE_NAME = %s\n", buf_name);
-		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(buf_cu), &buf_cu, NULL);
-		printf("DEVICE_MAX_COMPUTE_UNITS = %u\n", (unsigned int)buf_cu);
+		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_uint), numCompUnits+i, NULL);
+		printf("DEVICE_MAX_COMPUTE_UNITS = %u\n", (unsigned int)numCompUnits[i]);
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_CLOCK_FREQUENCY, sizeof(buf_freq), &buf_freq, NULL);
 		printf("DEVICE_MAX_CLOCK_FREQUENCY = %u\n", (unsigned int)buf_freq);
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(buf_mem), &buf_mem, NULL);
@@ -877,11 +877,22 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 		printf("CL_DEVICE_MAX_WORK_GROUP_SIZE = %lu \n\n", (unsigned long)hostDat->MaxWorkGroupSize);
 	}
 
-	// Deal with double precision, and case where there is no GPU
+	// Choose GPU with most compute units
+	cl_uint chosenOne = 0;
+	cl_uint chosenUnits = numCompUnits[0];
+	for(int i=0; i < (int)numGPUs; i++) {
+		if (numCompUnits[i] > chosenUnits) {
+			chosenOne = i;
+			chosenUnits = numCompUnits[i];
+		}
+	}
+	printf("Choosing device %lu with %lu compute units\n\n", (unsigned long)(chosenOne), (unsigned long)(chosenUnits));
+
+	// Deal with case where there is no GPU...
 
 	// Use default devices for now
 	devices[0] = devicePtrCPU[0];
-	devices[1] = devicePtrGPU[0];
+	devices[1] = devicePtrGPU[chosenOne];
 
 	free(platforms);
 	free(platformName);
@@ -1070,12 +1081,12 @@ int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq)
 float compute_tau(int viscosityModel, float srtII, cl_float NewtonianTau, cl_float* nonNewtonianParams)
 {
 	float tau;
-	
+
 	if (viscosityModel == VISC_NEWTONIAN) {
 		tau = NewtonianTau;
 	}
 	else if (viscosityModel == VISC_POWER_LAW) {
-	
+
 		float k = nonNewtonianParams[0];
 		float n = nonNewtonianParams[1];
 		float nu;
@@ -1093,24 +1104,24 @@ float compute_tau(int viscosityModel, float srtII, cl_float NewtonianTau, cl_flo
 		else {
 			nu = k*pow(srtII,n-1.0f);
 		}
-		
+
 		tau = 3.0f*nu + 0.5f;
 	}
 	else if (viscosityModel == VISC_CASSON) {
-		
+
 		float tau_Y = nonNewtonianParams[0];
 		float eta_inf = nonNewtonianParams[1];
 
 		float nu = (sqrt(tau_Y/srtII) + sqrt(eta_inf))*(sqrt(tau_Y/srtII) + sqrt(eta_inf));
 		tau = 3.0f*nu + 0.5f;
-		
+
 	}
 	else if (viscosityModel == VISC_HB) {
 		float tau_Y = nonNewtonianParams[0];
 		float k = nonNewtonianParams[1];
 		float n = nonNewtonianParams[2];
 		float nu;
-		
+
 		if (n == 0.5f) {
 			nu = tau_Y/srtII + k/sqrt(srtII);
 		}
@@ -1123,10 +1134,10 @@ float compute_tau(int viscosityModel, float srtII, cl_float NewtonianTau, cl_flo
 		else {
 			nu = tau_Y/srtII + k*pow(srtII,n-1.0f);
 		}
-		
+
 		tau = 3.0f*nu + 0.5f;
 	}
-	
+
 	return tau;
 }
 
