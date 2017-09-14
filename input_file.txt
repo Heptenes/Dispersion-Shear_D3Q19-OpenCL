@@ -2,7 +2,7 @@ iterations                      100
 
 video_freq                      10000000
 fluid_ouput_spacing             4
-console_print_freq              100
+console_print_freq              10
 shear_stress_freq               1000000
 
 constant_body_force             0.0 0.0 0.0
@@ -30,7 +30,7 @@ particle_diameter               14.0
 initial_particle_buffer         60.0
 initial_particle_distribution   3
 
-rebuild_neigh_list_freq         20
+rebuild_neigh_list_freq         100
 
 surf_point_write_atomic         8
 

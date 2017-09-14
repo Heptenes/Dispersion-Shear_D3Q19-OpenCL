@@ -393,7 +393,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		// Rebuild neighbour lists every intDat.RebuildFreq
 		if (usingParticles && t%hostDat->RebuildFreq == 0) {
 			
-			numParInZone_h = clEnqueueMapBuffer(*CPU_QueuePtr, numParInZone_cl, CL_TRUE, CL_MAP_WRITE, 0, totalNumZones*sizeof(cl_int), 0, NULL, NULL, &err_cl);
+			numParInZone_h = (cl_uint*) clEnqueueMapBuffer(*CPU_QueuePtr, 
+				numParInZone_cl, CL_TRUE, CL_MAP_WRITE, 0, totalNumZones*sizeof(cl_int), 0, NULL, NULL, &err_cl);
 			error_check(err_cl, "clEnqueueMapBuffer", 1);
 			
 			for (int i = 0; i < totalNumZones; i++) {
@@ -436,16 +437,16 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 	// --- COPY DATA TO HOST ---------------------------------------------------
 	// Velocity
-	//err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
-	//error_check(err_cl, "clEnqueueReadBuffer", 1);
+	err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
+	error_check(err_cl, "clEnqueueReadBuffer", 1);
 
-	//write_lattice_field(u_h, &intDat);
+	write_lattice_field(u_h, &intDat);
 
 	
 	if (usingParticles) {
 		
-		parFluidForce_h = clEnqueueMapBuffer(*CPU_QueuePtr, 
-			parFluidForce_cl, CL_TRUE, CL_MAP_WRITE, 0, parV4DataSize*intDat.NumForceArrays*2, 0, NULL, NULL, &err_cl);
+		parFluidForce_h = (cl_float4*)clEnqueueMapBuffer(*CPU_QueuePtr, 
+			parFluidForce_cl, CL_TRUE, CL_MAP_READ, 0, parV4DataSize*intDat.NumForceArrays*2, 0, NULL, NULL, &err_cl);
 		error_check(err_cl, "clEnqueueMapBuffer", 1);
 		
 		float finalForce[3] = {0.0, 0.0, 0.0};
@@ -460,14 +461,14 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	clFinish(*CPU_QueuePtr);
 	printf("Checkpoint: end of output\n");
 
-	/* Cleanup
+	// Cleanup
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);
 	LIST_OF_KERNELS
 #undef X
 
 #define X(memName) clReleaseMemObject(memName);
 	LIST_OF_CL_MEM
-#undef X */
+#undef X 
 
 	return 0;
 }

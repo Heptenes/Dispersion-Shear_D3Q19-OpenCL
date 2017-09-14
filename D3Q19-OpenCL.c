@@ -218,8 +218,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 			cl_float py = pb + sp[1]*((p/gridSize)%gridSize);
 			cl_float pz = pb + sp[2]*(p%gridSize);
 			// Position and velocity
-			parKinematics[p     ] = (cl_float4){px, py, pz, 0.0f};
-			parKinematics[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+			parKinematics[p     ] = (cl_float4){{px, py, pz, 0.0f}};
+			parKinematics[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 		}
 	}
 	else if (hostDat->InitialParticleDistribution == 2){
@@ -257,8 +257,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 			cl_float py = pb + sp[1]*((p/m)%n);
 			cl_float pz = pb + sp[2]*(p%m);
 			// Position and velocity
-			parKinematics[p     ] = (cl_float4){px, py, pz, 0.0f};
-			parKinematics[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+			parKinematics[p     ] = (cl_float4){{px, py, pz, 0.0f}};
+			parKinematics[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 		}
 	}
 	else if (hostDat->InitialParticleDistribution == 3) {
@@ -284,16 +284,16 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	// Angular quantities, forces and torque
 	for(int p = 0; p < np; p++) {
 		// Particle quaternion, last element is scalar part - easiest for use with float4 vectors
-		parKinematics[p + 2*np] = (cl_float4){0.0f, 0.0f, 0.0f, 1.0f};
+		parKinematics[p + 2*np] = (cl_float4){{0.0f, 0.0f, 0.0f, 1.0f}};
 		// Angular velocity
-		parKinematics[p + 3*np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+		parKinematics[p + 3*np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 
-		parForce[p     ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
-		parForce[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
+		parForce[p     ] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
+		parForce[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 
 		for (int fa = 0; fa < intDat->NumForceArrays; fa++) {
-			parFluidForce[p + np*(2*fa)    ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Force
-			parFluidForce[p + np*(2*fa + 1)] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Torque
+			parFluidForce[p + np*(2*fa)    ] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}}; // Force
+			parFluidForce[p + np*(2*fa + 1)] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}}; // Torque
 		}
 	}
 
@@ -540,8 +540,6 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 	    perror("Failed opening sphere discretization file !");
 	}
 
-	char fLine[128];
-	int nodesRead = 0;
 	float px, py, pz;
 
 	for(int n=0; n<numPoints; n++) {
@@ -549,7 +547,7 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 		px *= 0.5f*flpDat->ParticleDiam; // Scale points (from unit sphere) by particle radius
 		py *= 0.5f*flpDat->ParticleDiam;
 		pz *= 0.5f*flpDat->ParticleDiam;
-		(*spherePoints)[n] = (cl_float4){px, py, pz, 0.0};
+		(*spherePoints)[n] = (cl_float4){{px, py, pz, 0.0f}};
 		//printf("Sphere point %d read %f,%f,%f\n", n, px, py, pz);
 	}
 
@@ -621,7 +619,6 @@ void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, 
 	int n_x = intDat->LatticeSize[0];
 	int n_y = intDat->LatticeSize[1];
 	int n_z = intDat->LatticeSize[2];
-	int n_s = hostDat->FluidOutputSpacing; // for float division
 	int n_L = n_x*n_y*n_z;
 
 	FILE* fPtr;
@@ -1079,12 +1076,9 @@ int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq)
 
 float compute_tau(int viscosityModel, float srtII, cl_float NewtonianTau, cl_float* nonNewtonianParams)
 {
-	float tau;
+	float tau = NewtonianTau;
 
-	if (viscosityModel == VISC_NEWTONIAN) {
-		tau = NewtonianTau;
-	}
-	else if (viscosityModel == VISC_POWER_LAW) {
+	if (viscosityModel == VISC_POWER_LAW) {
 
 		float k = nonNewtonianParams[0];
 		float n = nonNewtonianParams[1];
