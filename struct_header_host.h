@@ -52,10 +52,10 @@ typedef struct {
 
 } flp_param_struct;
 
-typedef struct {
-	cl_int NeighborZones[32];
-	cl_int NumNeighbors;
-}  zone_struct;
+//typedef struct {
+//	cl_int NeighborZones[32];
+//	cl_int NumNeighbors;
+//}  zone_struct;
 
 /*typedef struct {
 

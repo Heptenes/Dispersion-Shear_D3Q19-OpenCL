@@ -43,7 +43,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	int_param_struct intDat;
 	flp_param_struct flpDat;
 	kernel_struct kernelDat;
-	zone_struct* zoneDat;
+	//zone_struct* zoneNeighDat;
 	size_t maxKernelSize = 256*128*128;
 
 	printf("Int struct size: %lu\n", sizeof(intDat));
@@ -84,7 +84,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	cl_float* f_h = (cl_float*)malloc(fDataSize);
 	cl_float* u_h = (cl_float*)malloc(a3DataSize);
 	cl_float* gpf_h = (cl_float*)malloc(a3DataSize*intDat.MaxSurfPointsPerNode);
-	cl_int* countPoint_h = (cl_int*)malloc(numNodes*sizeof(cl_uint));
+	cl_int* countPoint_h = (cl_int*)malloc(numNodes*sizeof(cl_int));
 	cl_float* tau_lb_h = (cl_float*)malloc(numNodes*sizeof(cl_float));
 	// Particle arrays
 	cl_float4* parKin_h = (cl_float4*)malloc(parV4DataSize*4); // x, vel, rot (quaternion), ang vel
@@ -93,16 +93,18 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	cl_float4* parFluidForceSum_h = (cl_float4*)calloc(numSurfPoints*2, sizeof(cl_float4)); // Check this
 	//
 	cl_int* threadMembers_h = (cl_int*)malloc(numParThreads*intDat.NumParticles*sizeof(cl_int)); // Max; could reduce mem
-	cl_uint* numParInThread_h = (cl_uint*)calloc(numParThreads, sizeof(cl_uint));
+	cl_int* numParInThread_h = (cl_int*)calloc(numParThreads, sizeof(cl_int));
 	//
 	cl_int* parsZone_h = (cl_int*)malloc(intDat.NumParticles*sizeof(cl_int));
 	cl_int* zoneMembers_h; // To be malloc'ed in initialize_particle_zones
-	cl_uint* numParInZone_h;
+	cl_int* numParInZone_h;
+	cl_int* zoneNeighDat_h;
 
 	// Initialization
 	initialize_lattice_fields(hostDat, &intDat, &flpDat, f_h, gpf_h, u_h, tau_lb_h, countPoint_h);
 	initialize_particle_fields(hostDat, &intDat, &flpDat, parKin_h, parForce_h, parFluidForce_h);
-	initialize_particle_zones(hostDat, &intDat, &flpDat, parKin_h, parsZone_h, &zoneMembers_h, &numParInZone_h, threadMembers_h, numParInThread_h, &zoneDat);
+	initialize_particle_zones(hostDat, &intDat, &flpDat, parKin_h, parsZone_h, &zoneMembers_h, &numParInZone_h, 
+		threadMembers_h, numParInThread_h, &zoneNeighDat_h);
 	size_t totalNumZones = intDat.NumZones[0]*intDat.NumZones[1]*intDat.NumZones[2];
 
 	// Stream mapping for pbcs
@@ -148,8 +150,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, numParThreads*intDat.NumParticles*sizeof(cl_int), threadMembers_h, &err_cl);
 	numParInThread_cl = clCreateBuffer(*contextPtr,
 		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, numParThreads*sizeof(cl_int), numParInThread_h, &err_cl);
-	zoneDat_cl = clCreateBuffer(*contextPtr,
-		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, totalNumZones*sizeof(zone_struct), zoneDat, &err_cl);
+	zoneNeighDat_cl = clCreateBuffer(*contextPtr,
+		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, 28*totalNumZones*sizeof(cl_int), zoneNeighDat_h, &err_cl);
 	error_check(err_cl, "clCreateBuffer 3", 1);
 	
 	intDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(int_param_struct), NULL, &err_cl);
@@ -248,7 +250,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 1, memSize, &flpDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 2, memSize, &parKin_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 3, memSize, &parForce_cl);
-	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 4, memSize, &zoneDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 4, memSize, &zoneNeighDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 5, memSize, &parsZone_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 6, memSize, &threadMembers_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_particle_forces, 7, memSize, &numParInThread_cl);
@@ -260,15 +262,13 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 2, memSize, &parKin_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 3, memSize, &parForce_cl);
 	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 4, memSize, &parFluidForce_cl);
-	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 5, memSize, &zoneDat_cl);
-	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 6, memSize, &parsZone_cl);
-	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 7, memSize, &threadMembers_cl);
-	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 8, memSize, &numParInThread_cl);
+	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 5, memSize, &threadMembers_cl);
+	err_cl |= clSetKernelArg(kernelDat.particle_dynamics, 6, memSize, &numParInThread_cl);
 
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 0, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 1, memSize, &flpDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 2, memSize, &parKin_cl);
-	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 3, memSize, &zoneDat_cl);
+	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 3, memSize, &zoneNeighDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 4, memSize, &threadMembers_cl);
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 5, memSize, &numParInThread_cl);
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 6, memSize, &parsZone_cl);
@@ -329,8 +329,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 
 		// Kernel: Particle update
 		if (usingParticles) {
-			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
-			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
+			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_dynamics, 1,
+				NULL, &numParThreads, NULL, 0, NULL, NULL);
 
 			clFinish(*CPU_QueuePtr);
 			clFinish(*GPU_QueuePtr);
@@ -386,14 +386,14 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
 			// Kernel: Particle-particle forces
-			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
-				NULL, &numParThreads, NULL, 0, NULL, NULL);
+			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
+			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
 		if (usingParticles && t%hostDat->RebuildFreq == 0) {
 			
-			numParInZone_h = (cl_uint*) clEnqueueMapBuffer(*CPU_QueuePtr, 
+			numParInZone_h = (cl_int*) clEnqueueMapBuffer(*CPU_QueuePtr, 
 				numParInZone_cl, CL_TRUE, CL_MAP_WRITE, 0, totalNumZones*sizeof(cl_int), 0, NULL, NULL, &err_cl);
 			error_check(err_cl, "clEnqueueMapBuffer", 1);
 			
@@ -417,8 +417,11 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		// Produce video output and/or analysis
 		if (t%hostDat->VideoFreq == 0) {
 			err_cl = clEnqueueReadBuffer(*GPU_QueuePtr, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
+			err_cl = clEnqueueReadBuffer(*CPU_QueuePtr, parKin_cl, CL_TRUE, 0, parV4DataSize*4, parKin_h, 0, NULL, NULL);
 			error_check(err_cl, "clEnqueueReadBuffer Video", 1);
 
+			clFinish(*GPU_QueuePtr); 
+			clFinish(*CPU_QueuePtr);
 			continuous_output(hostDat, &intDat, u_h, parKin_h, vidPtr, t);
 		}
 		if (t%hostDat->ShearStressFreq == 0) {

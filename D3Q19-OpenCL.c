@@ -301,8 +301,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 }
 
 void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float4* parKinematics, cl_int* parsZone, cl_int** zoneMembers, cl_uint** numParInZone, cl_int* threadMembers, cl_uint* numParInThread,
-	zone_struct** zoneDat)
+	cl_float4* parKinematics, cl_int* parsZone, cl_int** zoneMembers, cl_int** numParInZone, cl_int* threadMembers, cl_int* numParInThread,
+	cl_int** zoneNeighDat)
 {
 	// Calculate estimate of max particle relative speed
 	float vMax = 0.05f; // Guess
@@ -336,12 +336,12 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	// Assign particles to threads and zones
 	int numParThreads = hostDat->DomainDecomp[0]*hostDat->DomainDecomp[1]*hostDat->DomainDecomp[2];
 	int totalNumZones = intDat->NumZones[0]*intDat->NumZones[1]*intDat->NumZones[2];
-	*zoneDat = (zone_struct*)malloc(totalNumZones*sizeof(zone_struct));
 
 	printf("Total number of zones = %d\n", totalNumZones);
 
 	*zoneMembers = (cl_int*)malloc(totalNumZones*intDat->NumParticles*sizeof(cl_int));
-	*numParInZone = (cl_uint*)calloc(totalNumZones, sizeof(cl_uint));
+	*numParInZone = (cl_int*)calloc(totalNumZones, sizeof(cl_int));
+	*zoneNeighDat = (cl_int*)calloc(28*totalNumZones, sizeof(cl_int));
 
 	for (int p = 0; p < intDat->NumParticles; p++) {
 
@@ -361,11 +361,11 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
 
 		parsZone[p] = zoneID;
+		
 		(*zoneMembers)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
 		//
 		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID],
 			zoneID, zoneIDx, zoneIDy, zoneIDz);
-
 	}
 
 	// Loop over zones and add neighbors (x on inner loop to match GPU arrays)
@@ -376,7 +376,7 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 			for (int i = 0; i < intDat->NumZones[0]; i++) {
 
 				int zoneID = i + intDat->NumZones[0]*(j + intDat->NumZones[2]*k);
-				(*zoneDat)[zoneID].NumNeighbors = 0;
+				(*zoneNeighDat)[28*zoneID] = 0;
 
 				int lm = -1; int lp = 1; int mm = -1; int mp = 1; int nm = -1; int np = 1;
 
@@ -404,9 +404,11 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 
 							int neighID = lw + intDat->NumZones[0]*(mw + intDat->NumZones[2]*(nw));
 
-							printf("Zone %d (%d,%d,%d) has neighbor %d (%d,%d,%d)\n", zoneID,i,j,k, neighID,lw,mw,nw);
-							int numNeighs = (*zoneDat)[zoneID].NumNeighbors++;
-							(*zoneDat)[zoneID].NeighborZones[numNeighs] = neighID;
+							int numNeighs = ++((*zoneNeighDat)[zoneID*28]);
+							(*zoneNeighDat)[zoneID*28 + numNeighs] = neighID; 
+							
+							//printf("Zone %d (%d,%d,%d) has neighbor %d (%d,%d,%d)\n", zoneID,i,j,k, neighID,lw,mw,nw);
+							//printf("and num neighbors is %d\n", numNeighs);
 						}
 					}
 				}

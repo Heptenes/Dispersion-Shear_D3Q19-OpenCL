@@ -55,26 +55,26 @@ typedef struct {
 
 } flp_param_struct;
 
-typedef struct {
-	int NeighborZones[32];
-	int NumNeighbors;
-} zone_struct;
+//typedef struct {
+//	int NeighborZones[32];
+//	int NumNeighbors;
+//} zone_struct;
 
 __kernel void particle_particle_forces(
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat,
 	__global float4* parKin,
 	__global float4* parForce,
-	__global zone_struct* zoneDat,
+	__global int* zoneNeighDat,
 	__global int* parsZone,
 	__global int* threadMembers,
-	__global uint* numParInThread,
+	__global int* numParInThread,
 	__global int* zoneMembers,
-	__global uint* numParInZone)
+	__global int* numParInZone)
 {
 	int threadID = get_global_id(0);
-	printf("threadID = %d\n", threadID);
-	printf("numParInThread[threadID] = %d\n", numParInThread[threadID]);
+	//printf("threadID = %d\n", threadID);
+	//printf("numParInThread[threadID] = %d\n", numParInThread[threadID]);
 
 	for(int i = 0; i < numParInThread[threadID]; i++)
 	{
@@ -82,13 +82,13 @@ __kernel void particle_particle_forces(
 		int pi = threadMembers[threadID*intDat->NumParticles + i];
 
 		int pZone = parsZone[pi];
-		printf("zoneDat[pZone].NumNeighbors = %d\n", zoneDat[pZone].NumNeighbors);
+		//printf("zoneNeighDat[pZone*28] = %d\n", zoneNeighDat[pZone*28]);
 
 		// Loop over neighbour zones (which should include this particles zone as well)
-		for (int i_nz = 0; i_nz < zoneDat[pZone].NumNeighbors; i_nz++) {
+		for (int i_nz = 1; i_nz <= zoneNeighDat[pZone*28]; i_nz++) {
 
-			int zoneID = zoneDat->NeighborZones[i_nz];
-			printf("zoneID = %d\n", zoneID);
+			int zoneID = zoneNeighDat[pZone*28 + i_nz];
+			//printf("zoneID = %d\n", zoneID);
 
 			for (int j = 0; j < numParInZone[zoneID]; j++) {
 
@@ -125,10 +125,8 @@ __kernel void particle_dynamics(
 	__global float4* parKin,
 	__global float4* parForce,
 	__global float4* parFluidForce,
-	__global zone_struct* zoneDat,
-	__global int* parsZone,
 	__global int* threadMembers,
-	__global uint* numParInThread)
+	__global int* numParInThread)
 {
 	int threadID = get_global_id(0);
 	int np = intDat->NumParticles;
@@ -139,7 +137,7 @@ __kernel void particle_dynamics(
 	int N_z = intDat->LatticeSize[2];
 	float4 w = (float4){N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f}; // w is set to 1 to avoid nan when using fmod()
 
-	for(uint i = 0; i < numParInThread[threadID]; ++i)
+	for(int i = 0; i < numParInThread[threadID]; ++i)
 	{
 		int p = threadMembers[i];
 
@@ -209,12 +207,12 @@ __kernel void update_particle_zones(
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat,
 	__global float4* parKin,
-	__global zone_struct* zoneDat,
+	__global int* zoneNeighDat,
 	__global int* threadMembers,
-	__global uint* numParInThread,
+	__global int* numParInThread,
 	__global int* parsZone,
 	__global int* zoneMembers,
-	__global uint* numParInZone)
+	__global int* numParInZone)
 {
 	int threadID = get_global_id(0);
 
@@ -222,7 +220,7 @@ __kernel void update_particle_zones(
 	//printf(" num par in thread = %d\n", numParInThread[threadID]);
 
 	// Loop over particles for this thread
-	for(uint i = 0; i < numParInThread[threadID]; ++i)
+	for(int i = 0; i < numParInThread[threadID]; ++i)
 	{
 		int p = threadMembers[i + threadID*intDat->NumParticles];
 

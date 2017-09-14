@@ -63,9 +63,9 @@
 	X(parsZone_cl) \
 	X(zoneMembers_cl) \
 	X(numParInZone_cl) \
+	X(zoneNeighDat_cl) \
 	X(threadMembers_cl) \
-	X(numParInThread_cl) \
-	X(zoneDat_cl)
+	X(numParInThread_cl) 
 
 
 #include "struct_header_host.h"
@@ -128,9 +128,8 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float4* parKinematics, cl_float4* parForce, cl_float4* parFluidForce);
 
-void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float4* parKinematics, cl_int* parsZone, cl_int** parsInZone, cl_uint** numParsInZone, cl_int* parsInThread,
-	cl_uint* numParsInThread, zone_struct** zoneDat);
+void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat, cl_float4* parKinematics, 
+	cl_int* parsZone, cl_int** zoneMembers, cl_int** numParInZone, cl_int* threadMembers, cl_int* numParInThread, cl_int** zoneNeighDat);
 
 int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq);
 
