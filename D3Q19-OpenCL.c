@@ -448,6 +448,7 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 
 	// Select kernels from program
 	// GPU
+	kernelDat->collide_stream = clCreateKernel(programGPU, "collideMRT_stream_D3Q19", &error);
 	if (!error_check(error, "clCreateKernel collideMRT_stream_D3Q19", 1))
 		print_program_build_log(&programGPU, &devices[1]);
 
