@@ -56,8 +56,8 @@ typedef struct {
 } flp_param_struct;
 
 typedef struct {
+	int NeighborZones[32];
 	int NumNeighbors;
-	int NeighborZones[26];
 } zone_struct;
 
 __kernel void particle_particle_forces(
@@ -73,26 +73,29 @@ __kernel void particle_particle_forces(
 	__global uint* numParInZone)
 {
 	int threadID = get_global_id(0);
+	printf("threadID = %d\n", threadID);
+	printf("numParInThread[threadID] = %d\n", numParInThread[threadID]);
 
-	for(uint i = 0; i < numParInThread[threadID]; i++)
+	for(int i = 0; i < numParInThread[threadID]; i++)
 	{
 		// Detect collisions
 		int pi = threadMembers[threadID*intDat->NumParticles + i];
 
 		int pZone = parsZone[pi];
-		//printf("zoneDat[pZone].NumNeighbors = %d\n", zoneDat[pZone].NumNeighbors);
+		printf("zoneDat[pZone].NumNeighbors = %d\n", zoneDat[pZone].NumNeighbors);
 
 		// Loop over neighbour zones (which should include this particles zone as well)
 		for (int i_nz = 0; i_nz < zoneDat[pZone].NumNeighbors; i_nz++) {
 
 			int zoneID = zoneDat->NeighborZones[i_nz];
+			printf("zoneID = %d\n", zoneID);
 
 			for (int j = 0; j < numParInZone[zoneID]; j++) {
 
 				int pj = zoneMembers[zoneID*intDat->NumParticles + j];
 
 				if (pi > pj) {
-					//printf("Testing for collision between particles %d and %d\n", pi, pj);
+					printf("Testing for collision between particles %d and %d\n", pi, pj);
 					// Distance
 					float4 rij = parKin[pj] - parKin[pi];
 					float rSep = length(rij);

@@ -12,9 +12,10 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 	{-1, 1, 0}, {-1,-1, 0}, {-1, 0, 1}, {-1, 0,-1},
 	{ 0, 1, 1}, { 0, 1,-1}, { 0,-1, 1}, { 0,-1,-1} };
 
-	const cl_float EqWeightsD3Q19[19] = {1./3.,
-	1./18., 1./18., 1./18., 1./18., 1./18., 1./18.,
-	1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36., 1./36.};
+	const cl_float EqWeightsD3Q19[19] = {1.0f/3.0f,
+	1.0f/18.0f, 1.0f/18.0f, 1.0f/18.0f, 1.0f/18.0f, 1.0f/18.0f, 1.0f/18.0f,
+	1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 
+	1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f};
 
 	memcpy(intDat->BasisVel, BasisVelD3Q19, sizeof(BasisVelD3Q19));
 	memcpy(flpDat->EqWeights, EqWeightsD3Q19, sizeof(EqWeightsD3Q19));
@@ -179,7 +180,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	flpDat->ParticleMomInertia = 0.1f*flpDat->ParticleMass*flpDat->ParticleDiam*flpDat->ParticleDiam;
 	printf("Mass = %f, moment of inertia = %f\n", flpDat->ParticleMass, flpDat->ParticleMomInertia);
 
-	intDat->NumForceArrays = ceil((float)intDat->PointsPerParticle/(float)intDat->PointsPerWorkGroup);
+	intDat->NumForceArrays = (cl_int)ceil((float)intDat->PointsPerParticle/(float)intDat->PointsPerWorkGroup);
 
 	printf("\nNumber of particle force arrays needed = %d, (%d points, max %d per work group).\n\n",
 		intDat->NumForceArrays, intDat->PointsPerParticle, intDat->PointsPerWorkGroup);
@@ -190,7 +191,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	if (hostDat->InitialParticleDistribution == 1) {
 		// NxNxN lattice, for approx. cubic systems
 		float pb = hostDat->ParticleBuffer;
-		int gridSize = ceil(pow(np,1.0/3.0));
+		int gridSize = (int)ceil(pow(np,1.0/3.0));
 
 		if (gridSize == 0) {
 			perror("Error: InitialVel called without particles");
@@ -228,7 +229,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		float wM = intDat->LatticeSize[2]-pb-1;
 		float wN = intDat->LatticeSize[0]-pb-1;
 
-		int mdn = ceil(wM/wN);
+		int mdn = (int)ceil(wM/wN);
 
 		int npl = 0, n = 0;
 		while(npl < np) {
@@ -326,7 +327,7 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	for (int i = 0; i < 3; i++) {
 		// Total size in i'th dimension
 		float w = (float)(intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1);
-		intDat->NumZones[i] = floor(w/minZoneWidth) > 0 ? floor(w/minZoneWidth) : 1;
+		intDat->NumZones[i] = floor(w/minZoneWidth) > 0 ? (int)floor(w/minZoneWidth) : 1;
 		flpDat->ZoneWidth[i] = w/intDat->NumZones[i];
 		printf("Number of particle zones in dimension %d = %d\n", i, intDat->NumZones[i]);
 	}
@@ -403,7 +404,7 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 
 							int neighID = lw + intDat->NumZones[0]*(mw + intDat->NumZones[2]*(nw));
 
-							//printf("Zone %d (%d,%d,%d) has neighbor %d (%d,%d,%d)\n", zoneID,i,j,k, neighID,lw,mw,nw);
+							printf("Zone %d (%d,%d,%d) has neighbor %d (%d,%d,%d)\n", zoneID,i,j,k, neighID,lw,mw,nw);
 							int numNeighs = (*zoneDat)[zoneID].NumNeighbors++;
 							(*zoneDat)[zoneID].NeighborZones[numNeighs] = neighID;
 						}
@@ -511,7 +512,7 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 	float d = flpDat->ParticleDiam;
 	float area = M_PI*d*d;
 	int numPoints = 1;
-	int power2 = ceil(log2(area));
+	int power2 = (int)ceil(log2(area));
 
 	// Integer exponentiation 2^power2
 	for(int i = 0; i < power2; i++) {
@@ -742,7 +743,7 @@ int write_lattice_field(cl_float* field, int_param_struct* intDat)
 	FILE* fPtr2;
 	fPtr2 = fopen ("matlab_postproc/velocity_field_centerline.txt","w");
 
-	int i_y = floor((float)intDat->LatticeSize[1]/2.0f);
+	int i_y = (int)floor((float)intDat->LatticeSize[1]/2.0f);
 
 	for(int i_x=1; i_x < intDat->LatticeSize[0]-1; i_x++) {
 		for(int i_z=1; i_z < intDat->LatticeSize[2]-1; i_z++) {

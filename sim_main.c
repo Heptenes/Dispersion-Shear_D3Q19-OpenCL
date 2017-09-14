@@ -31,7 +31,7 @@ int main(int argc, char *argv[])
 	// Clean-up
 	clReleaseCommandQueue(queueCPU);
 	clReleaseCommandQueue(queueGPU);
-	//clReleaseContext(context);
+	clReleaseContext(context);
 
 	return 0;
 }
@@ -139,7 +139,6 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, totalNumZones*intDat.NumParticles*sizeof(cl_int), zoneMembers_h, &err_cl);
 	numParInZone_cl = clCreateBuffer(*contextPtr, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, totalNumZones*sizeof(cl_int), numParInZone_h, &err_cl);
-	
 	parFluidForceSum_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numSurfPoints*sizeof(cl_float4)*2, NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer 2", 1);
 
@@ -151,12 +150,13 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, numParThreads*sizeof(cl_int), numParInThread_h, &err_cl);
 	zoneDat_cl = clCreateBuffer(*contextPtr,
 		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, totalNumZones*sizeof(zone_struct), zoneDat, &err_cl);
+	error_check(err_cl, "clCreateBuffer 3", 1);
 	
 	intDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(int_param_struct), NULL, &err_cl);
 	flpDat_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, sizeof(flp_param_struct), NULL, &err_cl);
 	strMap_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, smDataSize, NULL, &err_cl);
 	spherePoints_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_ONLY, intDat.PointsPerParticle*sizeof(cl_float4), NULL, &err_cl);
-	error_check(err_cl, "clCreateBuffer 3", 1);
+	error_check(err_cl, "clCreateBuffer 4", 1);
 
 	// --- WRITE BUFFERS --------------------------------------------------------
 	err_cl = CL_SUCCESS;
@@ -386,8 +386,8 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
 			// Kernel: Particle-particle forces
-			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
-			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
+			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
+				NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
@@ -457,6 +457,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 			printf("Final force += %f %f %f\n", parFluidForce_h[i_fa].x, parFluidForce_h[i_fa].y, parFluidForce_h[i_fa].z);
 		}
 		printf("Final force on particle 1 = %f %f %f\n", finalForce[0], finalForce[1], finalForce[2]);
+		clEnqueueUnmapMemObject(*CPU_QueuePtr, parFluidForce_cl, parFluidForce_h, 0, NULL, NULL);
 	} 
 	clFinish(*CPU_QueuePtr);
 	printf("Checkpoint: end of output\n");
@@ -466,9 +467,12 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	LIST_OF_KERNELS
 #undef X
 
+	printf("Checkpoint: released kernels\n");
+
 #define X(memName) clReleaseMemObject(memName);
 	LIST_OF_CL_MEM
 #undef X 
 
+	printf("Checkpoint: end of sim_main\n");
 	return 0;
 }
