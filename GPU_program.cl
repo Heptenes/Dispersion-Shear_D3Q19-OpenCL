@@ -1,6 +1,5 @@
 
 #pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
-#pragma OPENCL EXTENSION cl_khr_fp64 : enable
 
 //#define USE_CONSTANT_VISCOSITY
 #define USE_VARIABLE_BODY_FORCE
