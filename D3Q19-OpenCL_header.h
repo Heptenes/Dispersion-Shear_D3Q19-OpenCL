@@ -126,7 +126,7 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 	cl_float* f_h, cl_float* gpf_h, cl_float* u_h, cl_float* tau_lb_h, cl_int* countPoint);
 
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float4* parKinematics, cl_float4* parForce, cl_float4** parFluidForce);
+	cl_float4* parKinematics, cl_float4* parForce, cl_float4* parFluidForce);
 
 void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float4* parKinematics, cl_int* parsZone, cl_int** parsInZone, cl_uint** numParsInZone, cl_int* parsInThread,

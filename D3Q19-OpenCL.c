@@ -170,7 +170,7 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 }
 
 void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
-	cl_float4* parKinematics, cl_float4* parForce, cl_float4** parFluidForce)
+	cl_float4* parKinematics, cl_float4* parForce, cl_float4* parFluidForce)
 {
 	printf("\nThere are %d particles.\n",intDat->NumParticles);
 
@@ -183,8 +183,6 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 
 	printf("\nNumber of particle force arrays needed = %d, (%d points, max %d per work group).\n\n",
 		intDat->NumForceArrays, intDat->PointsPerParticle, intDat->PointsPerWorkGroup);
-
-	*parFluidForce = (cl_float4*)malloc(intDat->NumParticles*sizeof(cl_float4)*intDat->NumForceArrays*2);
 
 	int np = intDat->NumParticles;
 
@@ -294,8 +292,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		parForce[p + np] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f};
 
 		for (int fa = 0; fa < intDat->NumForceArrays; fa++) {
-			(*parFluidForce)[p + np*(2*fa)    ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Force
-			(*parFluidForce)[p + np*(2*fa + 1)] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Torque
+			parFluidForce[p + np*(2*fa)    ] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Force
+			parFluidForce[p + np*(2*fa + 1)] = (cl_float4){0.0f, 0.0f, 0.0f, 0.0f}; // Torque
 		}
 	}
 

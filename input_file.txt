@@ -1,4 +1,4 @@
-iterations                      1
+iterations                      100
 
 video_freq                      10000000
 fluid_ouput_spacing             4
@@ -13,13 +13,13 @@ viscosity_params                0.00016 0.006788225099390857 0.5
 
 total_lattice_size              67 67 67
 
-boundary_conditions_xyz         1 0 0
-tangential_vel_bcs              0 1 1
+boundary_conditions_xyz         0 0 1
+tangential_vel_bcs              0 0 0
 
 initial_f                       constant
-initial_vel                     0.000178571 0.0 0.0
-velocity_bc_upper               0.000178571 0.0 0.0
-velocity_bc_lower               0.000178571 0.0 0.0
+initial_vel                     0.01 0.0 0.0
+velocity_bc_upper               0.01 0.0 0.0
+velocity_bc_lower               0.01 0.0 0.0
 cpu_only_mode                   0
 
 domain_decomposition            4 1 1
