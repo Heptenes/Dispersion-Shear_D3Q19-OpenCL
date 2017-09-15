@@ -1,7 +1,7 @@
 
 #pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
 
-//#define USE_CONSTANT_VISCOSITY
+#define USE_CONSTANT_VISCOSITY
 #define USE_VARIABLE_BODY_FORCE
 #define MIN_TAU 0.505
 #define SRT_EPS 1E-8
@@ -1020,12 +1020,9 @@ void guo_body_force_term(float u_x, float u_y, float u_z,
 
 float compute_tau(int viscosityModel, float srtII, float NewtonianTau, __global float* nonNewtonianParams)
 {
-	float tau;
+	float tau = NewtonianTau;
 
-	if (viscosityModel == VISC_NEWTONIAN) {
-		tau = NewtonianTau;
-	}
-	else if (viscosityModel == VISC_POWER_LAW) {
+	if (viscosityModel == VISC_POWER_LAW) {
 
 		float k = nonNewtonianParams[0];
 		float n = nonNewtonianParams[1];

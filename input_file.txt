@@ -1,38 +1,38 @@
-iterations                      1000
+iterations                      100
 
-video_freq                      100
+video_freq                      10
 fluid_ouput_spacing             4
-console_print_freq              10
-shear_stress_freq               1000000
+console_print_freq              100
+shear_stress_freq               10000000
 
 constant_body_force             0.0 0.0 0.0
-newtonian_tau                   1.25
+newtonian_tau                   1.0
 
 viscosity_model                 1
 viscosity_params                0.00016 0.006788225099390857 0.5 0.0
 
-total_lattice_size              83 83 83
+total_lattice_size              96 96 96 
 
-boundary_conditions_xyz         1 0 0
-tangential_vel_bcs              0 0 0 
+boundary_conditions_xyz         0 0 1
+tangential_vel_bcs              0 0 0
 
 initial_f                       constant
-initial_vel                     0.01 0.0 0.0
-velocity_bc_upper               0.01 0.0 0.0
-velocity_bc_lower               0.01 0.0 0.0
+initial_vel                     0.0 0.0 0.0
+velocity_bc_upper               0.1 0.0 0.0
+velocity_bc_lower               -0.1 0.0 0.0
 cpu_only_mode                   0
 
 domain_decomposition            1 1 1
 
-num_particles                   1
-particle_diameter               14.0
+num_particles                   8
+particle_diameter               12.4295
 
-initial_particle_buffer         40.0
-initial_particle_distribution   3
+initial_particle_buffer         10.0
+initial_particle_distribution   2
 
 rebuild_neigh_list_freq         20
 
-surf_point_write_atomic         8
+surf_point_write_atomic         4
 
 particle_collision_model        1
-particle_collision_params       1.0  0.0
+particle_collision_params       100.0  0.0

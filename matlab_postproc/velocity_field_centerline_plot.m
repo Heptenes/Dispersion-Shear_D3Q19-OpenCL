@@ -6,7 +6,7 @@ fName = 'velocity_field_centerline.txt';
 
 dataRead = dlmread(fName);
 
-dataSize = [81 193];
+dataSize = [81 254];
 circLoc = [40 32];
 
 xSurf = reshape(dataRead(:,4),dataSize);
@@ -28,7 +28,7 @@ set(gca, 'Color', 'none')
 set(gca,'FontName', 'Clear Sans', 'FontSize',16,'Linewidth',1.5);
 xlabel(gca,'X (lattice units)', 'Fontsize', 18, 'FontName', 'Clear Sans');
 ylabel(gca,'Z (lattice units)', 'Fontsize', 18, 'FontName', 'Clear Sans');
-xticks(0:16:192)
+xticks(0:32:224)
 yticks(0:16:92)
 
 subplot(1,2,2)
@@ -43,6 +43,6 @@ set(gca, 'Color', 'none')
 set(gca,'FontName', 'Clear Sans', 'FontSize',16,'Linewidth',1.5);
 xlabel(gca,'X (lattice units)', 'Fontsize', 18, 'FontName', 'Clear Sans');
 ylabel(gca,'Z (lattice units)', 'Fontsize', 18, 'FontName', 'Clear Sans');
-xticks(0:16:192)
+xticks(0:32:224)
 yticks(0:16:92)
 

@@ -47,7 +47,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"particle_diameter", TYPE_FLOAT, &(flpDat->ParticleDiam), "8.0"},
 		{"particle_density", TYPE_FLOAT, &(hostDat->ParticleDensity), "1.0"},
 		{"particle_collision_model", TYPE_INT, &(intDat->ParForceModel), "1"},
-		{"particle_collision_params", TYPE_FLOAT, &(flpDat->ParForceParams), "0.0, 0.0"},
+		{"particle_collision_params", TYPE_FLOAT, &(flpDat->ParForceParams), "1.0, 0.0"},
 		{"surf_point_write_atomic", TYPE_INT, &(intDat->MaxSurfPointsPerNode), "8"},
 		{"ibm_interpolation_mode", TYPE_INT, &(hostDat->InterpOrderIBM), "1"},
 		{"direct_forcing_coeff", TYPE_FLOAT, &(flpDat->DirectForcingCoeff), "1.0"},
@@ -417,74 +417,76 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	}
 }
 
-int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices)
+int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices,
+	cl_program* programCPU, cl_program* programGPU)
 {
+	printf("Creating LB kernels\n");
 	char* programSourceCPU = NULL;
 	char* programSourceGPU = NULL;
 	const char programNameCPU[] = "CPU_program.cl";
 	const char programNameGPU[] = "GPU_program.cl";
 
 	cl_int error;
-	cl_program programCPU, programGPU;
 
 	// Read program source code
 	read_program_source(&programSourceCPU, programNameCPU);
 	read_program_source(&programSourceGPU, programNameGPU);
 
 	// Create and build programs for devices
-	programGPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceGPU,
+	*programGPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceGPU,
 		NULL, &error);
 	error_check(error, "clCreateProgramWithSource GPU", 1);
 
-	clBuildProgram(programGPU, 1, &devices[1], NULL, NULL, &error);
+	clBuildProgram(*programGPU, 1, &devices[1], NULL, NULL, &error);
 	error_check(error, "clBuildProgram GPU", 1);
+	
 
 	// CPU
-	programCPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceCPU,
+	*programCPU = clCreateProgramWithSource(*contextPtr, 1, (const char**)&programSourceCPU,
 		NULL, &error);
 	error_check(error, "clCreateProgramWithSource CPU", 1);
 
-	clBuildProgram(programCPU, 1, &devices[0], NULL, NULL, &error);
+	clBuildProgram(*programCPU, 1, &devices[0], NULL, NULL, &error);
 	error_check(error, "clBuildProgram CPU", 1);
 
 	// Select kernels from program
 	// GPU
-	kernelDat->collide_stream = clCreateKernel(programGPU, "collideMRT_stream_D3Q19", &error);
+	kernelDat->collide_stream = clCreateKernel(*programGPU, "collideMRT_stream_D3Q19", &error);
 	if (!error_check(error, "clCreateKernel collideMRT_stream_D3Q19", 1))
-		print_program_build_log(&programGPU, &devices[1]);
+		print_program_build_log(programGPU, &devices[1]);
 
-	kernelDat->boundary_velocity = clCreateKernel(programGPU, "boundary_velocity", &error);
+	kernelDat->boundary_velocity = clCreateKernel(*programGPU, "boundary_velocity", &error);
 	if (!error_check(error, "clCreateKernel boundary_velocity", 1))
-		print_program_build_log(&programGPU, &devices[1]);
+		print_program_build_log(programGPU, &devices[1]);
 
-	kernelDat->boundary_periodic = clCreateKernel(programGPU, "boundary_periodic", &error);
+	kernelDat->boundary_periodic = clCreateKernel(*programGPU, "boundary_periodic", &error);
 	if (!error_check(error, "clCreateKernel boundary_periodic", 1))
-		print_program_build_log(&programGPU, &devices[1]);
+		print_program_build_log(programGPU, &devices[1]);
 
-	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(programGPU, "particle_fluid_forces_linear_stencil", &error);
+	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(*programGPU, "particle_fluid_forces_linear_stencil", &error);
 	if (!error_check(error, "clCreateKernel fluid_particle_forces_linear_stencil", 1))
-		print_program_build_log(&programGPU, &devices[1]);
+		print_program_build_log(programGPU, &devices[1]);
 
-	kernelDat->sum_particle_fluid_forces = clCreateKernel(programGPU, "sum_particle_fluid_forces", &error);
+	kernelDat->sum_particle_fluid_forces = clCreateKernel(*programGPU, "sum_particle_fluid_forces", &error);
 	if (!error_check(error, "clCreateKernel sum_particle_fluid_forces", 1))
-		print_program_build_log(&programGPU, &devices[1]);
+		print_program_build_log(programGPU, &devices[1]);
 
-	kernelDat->reset_particle_fluid_forces = clCreateKernel(programGPU, "reset_particle_fluid_forces", &error);
+	kernelDat->reset_particle_fluid_forces = clCreateKernel(*programGPU, "reset_particle_fluid_forces", &error);
 	if (!error_check(error, "clCreateKernel reset_particle_fluid_forces", 1))
-		print_program_build_log(&programGPU, &devices[1]);
+		print_program_build_log(programGPU, &devices[1]);
 
 	// CPU
-	kernelDat->particle_dynamics = clCreateKernel(programCPU, "particle_dynamics", &error);
+	kernelDat->particle_dynamics = clCreateKernel(*programCPU, "particle_dynamics", &error);
 	if (!error_check(error, "clCreateKernel particle_dynamics", 1))
-		print_program_build_log(&programCPU, &devices[0]);
+		print_program_build_log(programCPU, &devices[0]);
 
-	kernelDat->particle_particle_forces = clCreateKernel(programCPU, "particle_particle_forces", &error);
+	kernelDat->particle_particle_forces = clCreateKernel(*programCPU, "particle_particle_forces", &error);
 	if (!error_check(error, "clCreateKernel particle_particle_forces", 1))
-		print_program_build_log(&programCPU, &devices[0]);
+		print_program_build_log(programCPU, &devices[0]);
 
-	kernelDat->update_particle_zones = clCreateKernel(programCPU, "update_particle_zones", &error);
+	kernelDat->update_particle_zones = clCreateKernel(*programCPU, "update_particle_zones", &error);
 	if (!error_check(error, "clCreateKernel update_particle_zones", 1))
-		print_program_build_log(&programCPU, &devices[0]);
+		print_program_build_log(programCPU, &devices[0]);
 
 	size_t actualWorkGrpSize;
 	clGetKernelWorkGroupInfo(kernelDat->particle_fluid_forces_linear_stencil, devices[1],
@@ -501,9 +503,8 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 	intDat->PointsPerWorkGroup = workSize > intDat->PointsPerParticle ? intDat->PointsPerParticle : workSize;
 
 
-
-	clReleaseProgram(programCPU);
-	clReleaseProgram(programGPU);
+	//clReleaseProgram(programCPU);
+	//clReleaseProgram(programGPU);
 
 	return 0;
 }
@@ -672,7 +673,6 @@ void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, 
 	}
 	fclose(fPtr);
 }
-
 
 void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame)
 {
@@ -891,7 +891,7 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 
 	// Use default devices for now
 	devices[0] = devicePtrCPU[0];
-	devices[1] = devicePtrGPU[chosenOne];
+	devices[1] = devicePtrGPU[0];
 
 	free(platforms);
 	free(platformName);
@@ -1222,7 +1222,7 @@ int error_check(cl_int err, char* clFunc, int print)
 			case -67: printf("%s\n", "CL_INVALID_LINKER_OPTIONS"); break;
 			case -68: printf("%s\n", "CL_INVALID_DEVICE_PARTITION_COUNT"); break;
 		}
-		return 0;
+		exit(0);
 	}
 	else if (print == 1) {
 		printf("Call to %s success (%d) \n", clFunc, err);

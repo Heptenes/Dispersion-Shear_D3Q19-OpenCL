@@ -82,7 +82,7 @@ __kernel void particle_particle_forces(
 		int pi = threadMembers[threadID*intDat->NumParticles + i];
 
 		int pZone = parsZone[pi];
-		//printf("zoneNeighDat[pZone*28] = %d\n", zoneNeighDat[pZone*28]);
+		printf("zoneNeighDat[pZone*28] = %d\n", zoneNeighDat[pZone*28]);
 
 		// Loop over neighbour zones (which should include this particles zone as well)
 		for (int i_nz = 1; i_nz <= zoneNeighDat[pZone*28]; i_nz++) {

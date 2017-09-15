@@ -37,11 +37,11 @@
 	X(collide_stream) \
 	X(boundary_velocity) \
 	X(boundary_periodic) \
-	X(particle_dynamics) \
-	X(particle_particle_forces) \
 	X(particle_fluid_forces_linear_stencil) \
 	X(sum_particle_fluid_forces) \
 	X(reset_particle_fluid_forces) \
+	X(particle_dynamics) \
+	X(particle_particle_forces) \
 	X(update_particle_zones)
 
 
@@ -115,7 +115,8 @@ typedef struct {
 
 
 int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_command_queue* CPU_QueuePtr, cl_command_queue* GPU_QueuePtr,
-	cl_context* contextPtr);
+	cl_context* contextPtr, cl_program* programCPU, cl_program* programGPU);
+	
 void particle_dynamics(int_param_struct* intDat, cl_float4* parKinematics_h, cl_float4* parForces_h);
 
 int initialize_data(int_param_struct* intParams, flp_param_struct* floatParams, host_param_struct* hostParams);
@@ -147,7 +148,8 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 
 void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float* tau_lb_h, int frame);
 
-int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices);
+int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices,
+	cl_program* programCPU, cl_program* programGPU);
 
 int display_input_params(int_param_struct* intParams, flp_param_struct* floatParams);
 

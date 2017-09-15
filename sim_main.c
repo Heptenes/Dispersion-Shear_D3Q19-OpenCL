@@ -10,6 +10,11 @@ int main(int argc, char *argv[])
 	cl_context context;
 	context = clCreateContext(NULL, 2, devices, NULL, NULL, &error);
 	error_check(error, "clCreateContext", 1);
+	
+	// Create programs
+	cl_program programCPU, programGPU;
+	cl_program* programCPUptr = &programCPU;
+	cl_program* programGPUptr = &programGPU;
 
 	// Create a command queue for CPU and GPU
 	cl_command_queue queueCPU, queueGPU;
@@ -21,23 +26,27 @@ int main(int argc, char *argv[])
 	error_check(error, "clCreateCommandQueue", 1);
 
 	// Test devices
-	vecadd_test(10, &devices[0], &queueCPU, &context);
-	vecadd_test(10, &devices[1], &queueGPU, &context);
+	//vecadd_test(10, &devices[0], &queueCPU, &context);
+	//vecadd_test(10, &devices[1], &queueGPU, &context);
 
 	// Run LB calculation
-	int returnLB = simulation_main(&hostDat, devices, &queueCPU, &queueGPU, &context);
+	int returnLB = simulation_main(&hostDat, devices, &queueCPU, &queueGPU, &context, programCPUptr, programGPUptr);
 	printf("LB returned %d\n", returnLB);
 
 	// Clean-up
 	clReleaseCommandQueue(queueCPU);
 	clReleaseCommandQueue(queueGPU);
-	clReleaseContext(context);
+	clReleaseProgram(programCPU);
+	clReleaseProgram(programGPU);
+	clReleaseDevice(devices[0]);
+	clReleaseDevice(devices[1]);
+	clReleaseContext(context); 
 
 	return 0;
 }
 
 int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_command_queue* CPU_QueuePtr, cl_command_queue* GPU_QueuePtr,
-	cl_context* contextPtr)
+	cl_context* contextPtr, cl_program* programCPU, cl_program* programGPU)
 {
 	// Initialise parameter structs
 	int_param_struct intDat;
@@ -61,7 +70,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	sphere_discretization(&intDat, &flpDat, &spherePoints);
 
 	// Build LB kernels
-	create_LB_kernels(&intDat, &kernelDat, contextPtr, devices);
+	create_LB_kernels(&intDat, &kernelDat, contextPtr, devices, programCPU, programGPU);
 
 	// Some useful data sizes (cl functions often need size_t*)
 	size_t numNodes = intDat.LatticeSize[0]*intDat.LatticeSize[1]*intDat.LatticeSize[2];
@@ -74,7 +83,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	size_t numSurfPoints = intDat.NumParticles > 0 ? intDat.TotalSurfPoints : 32;
 	size_t pointWorkSize = intDat.PointsPerWorkGroup;
 
-	size_t fDataSize = numNodes*LB_Q*sizeof(cl_float);
+	size_t fDataSize = numNodes*19*sizeof(cl_float);
 	size_t a3DataSize = numNodes*3*sizeof(cl_float);
 	size_t parA3DataSize = intDat.NumParticles*3*sizeof(cl_float); // Array implementation
 	size_t parV4DataSize = intDat.NumParticles*sizeof(cl_float4);  // Vector type implementation
@@ -120,9 +129,13 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	// Lattice fields
 	cl_int err_cl = CL_SUCCESS;
 	fA_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer fA", 1);
 	fB_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, fDataSize, NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer fB", 1);
 	u_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize, NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer u_cl", 1);
 	gpf_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer gpf_cl", 1);
 	countPoint_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_int), NULL, &err_cl);
 	tau_lb_cl = clCreateBuffer(*contextPtr, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer 1", 1);
@@ -186,7 +199,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	size_t velBC_work_size[3];
 	size_t tanBC_work_size[3];
 	cl_int wallAxis=0; cl_int tanAxis=0;
-	cl_int calcRho=1; cl_int tanCalcRho=0;
+	cl_int calcRho=0; cl_int tanCalcRho=0;
 
 	// Work sizes
 	int velBoundary=0;
@@ -386,14 +399,14 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 
 			// Kernel: Particle-particle forces
-			//clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
-			//	NULL, &numParThreads, NULL, 0, NULL, NULL);
+			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.particle_particle_forces, 1,
+				NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
 		if (usingParticles && t%hostDat->RebuildFreq == 0) {
 			
-			numParInZone_h = (cl_int*) clEnqueueMapBuffer(*CPU_QueuePtr, 
+			numParInZone_h = (cl_int*)clEnqueueMapBuffer(*CPU_QueuePtr, 
 				numParInZone_cl, CL_TRUE, CL_MAP_WRITE, 0, totalNumZones*sizeof(cl_int), 0, NULL, NULL, &err_cl);
 			error_check(err_cl, "clEnqueueMapBuffer", 1);
 			
@@ -463,7 +476,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 		clEnqueueUnmapMemObject(*CPU_QueuePtr, parFluidForce_cl, parFluidForce_h, 0, NULL, NULL);
 	} 
 	clFinish(*CPU_QueuePtr);
-	printf("Checkpoint: end of output\n");
+	printf("Checkpoint: end of output\n"); 
 
 	// Cleanup
 #define X(kernelName) clReleaseKernel(kernelDat.kernelName);
