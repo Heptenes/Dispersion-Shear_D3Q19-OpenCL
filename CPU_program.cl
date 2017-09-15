@@ -50,15 +50,12 @@ typedef struct {
 	float PointArea;
 	float ParticleMomInertia;
 	float ParForceParams[2];
+	float ParticleZBuffer;
 
 	float DirectForcingCoeff;
 
 } flp_param_struct;
 
-//typedef struct {
-//	int NeighborZones[32];
-//	int NumNeighbors;
-//} zone_struct;
 
 __kernel void particle_particle_forces(
 	__global int_param_struct* intDat,
@@ -80,22 +77,25 @@ __kernel void particle_particle_forces(
 	{
 		// Detect collisions
 		int pi = threadMembers[threadID*intDat->NumParticles + i];
+		//printf("pi = %d\n", pi);
 
 		int pZone = parsZone[pi];
-		printf("zoneNeighDat[pZone*28] = %d\n", zoneNeighDat[pZone*28]);
+		//printf("zoneNeighDat[pZone*28] = %d\n", zoneNeighDat[pZone*28]);
 
 		// Loop over neighbour zones (which should include this particles zone as well)
 		for (int i_nz = 1; i_nz <= zoneNeighDat[pZone*28]; i_nz++) {
 
 			int zoneID = zoneNeighDat[pZone*28 + i_nz];
 			//printf("zoneID = %d\n", zoneID);
+			//printf("numParInZone[zoneID] = %d\n", numParInZone[zoneID]);
 
 			for (int j = 0; j < numParInZone[zoneID]; j++) {
 
 				int pj = zoneMembers[zoneID*intDat->NumParticles + j];
+				//printf("pj = %d\n", pj);
 
 				if (pi > pj) {
-					printf("Testing for collision between particles %d and %d\n", pi, pj);
+					//printf("Testing for collision between particles %d and %d\n", pi, pj);
 					// Distance
 					float4 rij = parKin[pj] - parKin[pi];
 					float rSep = length(rij);
@@ -103,10 +103,14 @@ __kernel void particle_particle_forces(
 
 					//printf("rij, |r| = (%f,%f,%f) %f\n", rij.x, rij.y, rij.z, rSep);
 
-					float overlap = rSep - flpDat->ParticleDiam;
+					float overlap = flpDat->ParticleDiam - rSep;
+					//printf("overlap = %f\n", overlap);
 
-					if (intDat->ParForceModel == PAR_COL_HARMONIC) { // Harmonic f = k.x
+					if (overlap > 0 && intDat->ParForceModel == PAR_COL_HARMONIC) { // Harmonic f = k.x
+						//printf("Harmonic collision between particles %d and %d\n", pi, pj);
+						
 						float fMag = flpDat->ParForceParams[0]*overlap;
+						//printf("fMag = %f\n", fMag);
 
 						// Update forces (no torque contribution)
 						parForce[pi] -= eij*fMag;
@@ -114,6 +118,16 @@ __kernel void particle_particle_forces(
 					}
 				}
 			}
+		}
+		
+		// Particle-wall collisions
+		float lowerOverlap = flpDat->ParticleZBuffer - parKin[pi].z;
+		if (lowerOverlap > 0) {
+			parForce[pi].z += flpDat->ParForceParams[0]*lowerOverlap;
+		}
+		float upperOverlap = parKin[pi].z - ((float)intDat->LatticeSize[2]-flpDat->ParticleZBuffer-3.0f);
+		if (upperOverlap > 0) {
+			parForce[pi].z -= flpDat->ParForceParams[0]*upperOverlap;
 		}
 	}
 }
@@ -199,6 +213,10 @@ __kernel void particle_dynamics(
 		//printf("Old ang. vel: %f %f %f\n", av.x, av.y, av.z);
 		parKin[p + 3*np] = av + angAccel;
 		//printf("New ang. vel: %f %f %f\n", parKin[p+3*np].x, parKin[p+3*np].y, parKin[p+3*np].z);
+		
+		// Reset force and torque
+		parForce[p] = (float4){0.0f, 0.0f, 0.0f, 0.0f};
+		parForce[p + np] = (float4){0.0f, 0.0f, 0.0f, 0.0f};
 	}
 }
 
@@ -207,7 +225,6 @@ __kernel void update_particle_zones(
 	__global int_param_struct* intDat,
 	__global flp_param_struct* flpDat,
 	__global float4* parKin,
-	__global int* zoneNeighDat,
 	__global int* threadMembers,
 	__global int* numParInThread,
 	__global int* parsZone,
@@ -225,10 +242,11 @@ __kernel void update_particle_zones(
 		int p = threadMembers[i + threadID*intDat->NumParticles];
 
 		// Particles always belong to their initial thread
-		int zoneIDx = parKin[p].x/flpDat->ZoneWidth[0]; // Need to use more vector types
-		int zoneIDy = parKin[p].y/flpDat->ZoneWidth[1];
-		int zoneIDz = parKin[p].z/flpDat->ZoneWidth[2];
+		int zoneIDx = (int)(parKin[p].x/flpDat->ZoneWidth[0]); 
+		int zoneIDy = (int)(parKin[p].y/flpDat->ZoneWidth[1]);
+		int zoneIDz = (int)(parKin[p].z/flpDat->ZoneWidth[2]);
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
+		//printf("ZoneID x,y,z = %d,%d,%d", zoneIDx, zoneIDy, zoneIDz);
 
 		parsZone[p] = zoneID;
 		zoneMembers[zoneID*intDat->NumParticles + numParInZone[zoneID]++] = p;

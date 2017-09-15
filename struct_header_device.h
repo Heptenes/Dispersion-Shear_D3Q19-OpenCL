@@ -47,6 +47,7 @@ typedef struct {
 	float PointArea;
 	float ParticleMomInertia;
 	float ParForceParams[2];
+	float ParticleZBuffer;
 	
 	float DirectForcingCoeff;
 

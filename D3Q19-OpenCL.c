@@ -44,6 +44,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"num_particles", TYPE_INT, &(intDat->NumParticles), "0"},
 		{"initial_particle_distribution", TYPE_INT, &(hostDat->InitialParticleDistribution), "1"},
 		{"initial_particle_buffer", TYPE_FLOAT, &(hostDat->ParticleBuffer), "4.0"},
+		{"z_wall_particle_buffer", TYPE_FLOAT, &(flpDat->ParticleZBuffer), "10.0"},
 		{"particle_diameter", TYPE_FLOAT, &(flpDat->ParticleDiam), "8.0"},
 		{"particle_density", TYPE_FLOAT, &(hostDat->ParticleDensity), "1.0"},
 		{"particle_collision_model", TYPE_INT, &(intDat->ParForceModel), "1"},

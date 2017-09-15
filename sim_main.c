@@ -281,12 +281,11 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 0, memSize, &intDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 1, memSize, &flpDat_cl);
 	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 2, memSize, &parKin_cl);
-	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 3, memSize, &zoneNeighDat_cl);
-	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 4, memSize, &threadMembers_cl);
-	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 5, memSize, &numParInThread_cl);
-	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 6, memSize, &parsZone_cl);
-	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 7, memSize, &zoneMembers_cl);
-	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 8, memSize, &numParInZone_cl);
+	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 3, memSize, &threadMembers_cl);
+	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 4, memSize, &numParInThread_cl);
+	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 5, memSize, &parsZone_cl);
+	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 6, memSize, &zoneMembers_cl);
+	err_cl |= clSetKernelArg(kernelDat.update_particle_zones, 7, memSize, &numParInZone_cl);
 
 	error_check(err_cl, "clSetKernelArg GPU kernels", 1);
 
@@ -416,6 +415,7 @@ int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_comman
 				numParInZone_h[i] = 0;
 			}
 			clEnqueueUnmapMemObject(*CPU_QueuePtr, numParInZone_cl, numParInZone_h, 0, NULL, NULL);
+			clFinish(*CPU_QueuePtr);
 			clEnqueueNDRangeKernel(*CPU_QueuePtr, kernelDat.update_particle_zones, 1,
 				NULL, &numParThreads, NULL, 0, NULL, NULL);
 			clFinish(*CPU_QueuePtr);
