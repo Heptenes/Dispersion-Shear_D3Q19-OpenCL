@@ -11,7 +11,6 @@
 
 //#include "struct_header_device.h"
 
-
 #define VISC_NEWTONIAN 1
 #define VISC_POWER_LAW 2
 #define VISC_HB 3

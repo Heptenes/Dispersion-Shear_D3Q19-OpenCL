@@ -53,25 +53,3 @@ typedef struct {
 
 } flp_param_struct;
 
-//typedef struct {
-//	int NeighborZones[32];
-//	int NumNeighbors;
-//}  zone_struct;
-
-/*typedef struct {
-
-	// Translational DOF
-	float xyz[3];
-	float force[3];
-	float velocity[3];
-
-	// Rotational DOF
-	float rot[3]
-	float torque[3];
-	float angVel[3];
-
-	// Discretization
-	int numNodes;
-	float* particleNodes;
-
-} host_particle_struct;*/

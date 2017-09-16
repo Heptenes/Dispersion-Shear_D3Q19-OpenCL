@@ -43,6 +43,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 		{"velocity_bc_lower", TYPE_FLOAT_3VEC, &(flpDat->VelLower), "0.0 0.0 0.0"},
 		{"num_particles", TYPE_INT, &(intDat->NumParticles), "0"},
 		{"initial_particle_distribution", TYPE_INT, &(hostDat->InitialParticleDistribution), "1"},
+		{"random_particle_shift", TYPE_FLOAT, &(hostDat->RandParticleShift), "0.0"},
 		{"initial_particle_buffer", TYPE_FLOAT, &(hostDat->ParticleBuffer), "4.0"},
 		{"z_wall_particle_buffer", TYPE_FLOAT, &(flpDat->ParticleZBuffer), "10.0"},
 		{"particle_diameter", TYPE_FLOAT, &(flpDat->ParticleDiam), "8.0"},
@@ -63,7 +64,7 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 	// Set defaults
 	for (int p=0; p<inputDefaultSize; p++) {
 		//
-		char defaultLine[WORD_STRING_SIZE] = {0};
+		char defaultLine[WORD_STRING_SIZE*2 + 2] = {0};
 		sprintf(defaultLine, "%s %s", inputDefaults[p].keyword, inputDefaults[p].defString);
 		process_input_line(&defaultLine[0], inputDefaults, inputDefaultSize);
 	}
@@ -255,10 +256,11 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		printf("Lattice spacing = %f x %f x %f\n", sp[0], sp[1], sp[2]);
 
 		for(int p = 0; p < np; p++) {
-			cl_float px = pb + sp[0]*(p/(n*m));
-			cl_float py = pb + sp[1]*((p/m)%n);
-			cl_float pz = pb + sp[2]*(p%m);
+			cl_float px = pb + sp[0]*(p/(n*m)) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
+			cl_float py = pb + sp[1]*((p/m)%n) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
+			cl_float pz = pb + sp[2]*(p%m) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
 			// Position and velocity
+			//printf("Placing particle at position %f %f %f\n", px, py, pz);
 			parKinematics[p     ] = (cl_float4){{px, py, pz, 0.0f}};
 			parKinematics[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 		}
@@ -453,40 +455,40 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 	// Select kernels from program
 	// GPU
 	kernelDat->collide_stream = clCreateKernel(*programGPU, "collideMRT_stream_D3Q19", &error);
-	if (!error_check(error, "clCreateKernel collideMRT_stream_D3Q19", 1))
+	if (error_check(error, "clCreateKernel collideMRT_stream_D3Q19", 1))
 		print_program_build_log(programGPU, &devices[1]);
 
 	kernelDat->boundary_velocity = clCreateKernel(*programGPU, "boundary_velocity", &error);
-	if (!error_check(error, "clCreateKernel boundary_velocity", 1))
+	if (error_check(error, "clCreateKernel boundary_velocity", 1))
 		print_program_build_log(programGPU, &devices[1]);
 
 	kernelDat->boundary_periodic = clCreateKernel(*programGPU, "boundary_periodic", &error);
-	if (!error_check(error, "clCreateKernel boundary_periodic", 1))
+	if (error_check(error, "clCreateKernel boundary_periodic", 1))
 		print_program_build_log(programGPU, &devices[1]);
 
 	kernelDat->particle_fluid_forces_linear_stencil = clCreateKernel(*programGPU, "particle_fluid_forces_linear_stencil", &error);
-	if (!error_check(error, "clCreateKernel fluid_particle_forces_linear_stencil", 1))
+	if (error_check(error, "clCreateKernel fluid_particle_forces_linear_stencil", 1))
 		print_program_build_log(programGPU, &devices[1]);
 
 	kernelDat->sum_particle_fluid_forces = clCreateKernel(*programGPU, "sum_particle_fluid_forces", &error);
-	if (!error_check(error, "clCreateKernel sum_particle_fluid_forces", 1))
+	if (error_check(error, "clCreateKernel sum_particle_fluid_forces", 1))
 		print_program_build_log(programGPU, &devices[1]);
 
 	kernelDat->reset_particle_fluid_forces = clCreateKernel(*programGPU, "reset_particle_fluid_forces", &error);
-	if (!error_check(error, "clCreateKernel reset_particle_fluid_forces", 1))
+	if (error_check(error, "clCreateKernel reset_particle_fluid_forces", 1))
 		print_program_build_log(programGPU, &devices[1]);
 
 	// CPU
 	kernelDat->particle_dynamics = clCreateKernel(*programCPU, "particle_dynamics", &error);
-	if (!error_check(error, "clCreateKernel particle_dynamics", 1))
+	if (error_check(error, "clCreateKernel particle_dynamics", 1))
 		print_program_build_log(programCPU, &devices[0]);
 
 	kernelDat->particle_particle_forces = clCreateKernel(*programCPU, "particle_particle_forces", &error);
-	if (!error_check(error, "clCreateKernel particle_particle_forces", 1))
+	if (error_check(error, "clCreateKernel particle_particle_forces", 1))
 		print_program_build_log(programCPU, &devices[0]);
 
 	kernelDat->update_particle_zones = clCreateKernel(*programCPU, "update_particle_zones", &error);
-	if (!error_check(error, "clCreateKernel update_particle_zones", 1))
+	if (error_check(error, "clCreateKernel update_particle_zones", 1))
 		print_program_build_log(programCPU, &devices[0]);
 
 	size_t actualWorkGrpSize;
@@ -618,7 +620,8 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 }
 
 
-void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float* tau_lb_h, int frame)
+void compute_shear_stress(output_data_struct* outDat, host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
+	cl_float* u_h, cl_float* tau_lb_h, int frame)
 {
 	// Write fluid
 	int n_x = intDat->LatticeSize[0];
@@ -635,6 +638,9 @@ void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, 
 
 	float* uMeanX;
 	uMeanX = (float*)calloc(n_z,sizeof(float));
+	
+	// Forwards difference from lower and upper boundary
+	float dudzL = 0.0f, dudzU = 0.0f;
 
 	for(int i_z=1; i_z < n_z-1; i_z++) {
 		//
@@ -660,18 +666,35 @@ void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, 
 		uMean[1] /= n_xy;
 		uMean[2] /= n_xy;
 		fprintf(fPtr, "%8.6f %8.6f %8.6f\n", uMean[0], uMean[1], uMean[2]);
+		
+		
 
-		// Forwards difference from lower boundary
-		if (i_z == (2+buffer)) {
-			float dudz = uMeanX[i_z]-uMeanX[i_z-1];
-			printf("Shear rate (1st order) = %f\n", dudz);
-		}
 		if (i_z == (3+buffer)) {
-			float dudz = 0.5*(uMeanX[i_z]-uMeanX[i_z-2]);
-			printf("Shear rate (2nd order) = %f\n", dudz);
+			dudzL = 0.5f*(uMeanX[i_z]-uMeanX[i_z-2]);
 		}
-
+		else if (i_z == (n_z-2-buffer)) {
+			dudzU = 0.5f*(uMeanX[i_z]-uMeanX[i_z-2]);
+		}
 	}
+	// Output counter (for averaging)
+	int count = ++(outDat->ShearStressCount);
+	
+	// Average of upper and lower shear
+	float dudz = 0.5f*(dudzU + dudzL);
+			
+	outDat->ShearStressAvg = (outDat->ShearStressAvg*(count-1) + dudz)/count;
+	printf("Shear rate at wall = %f\n", outDat->ShearStressAvg);
+			
+	int intBuffer = (int)(flpDat->ParticleZBuffer + 1E-8); // 
+	int zbL = 1+intBuffer;
+	int zbU = (int)(n_z-2 - intBuffer);
+	
+	float actualShearRate = (uMeanX[zbU] - uMeanX[zbL])/(zbU-zbL);
+	//actualShearRate = abs(actualShearRate);
+		
+	outDat->ActualShearRate = (outDat->ActualShearRate*(outDat->ShearStressCount-1) + actualShearRate)/outDat->ShearStressCount;
+	printf("Shear rate in particle region = %f\n", outDat->ActualShearRate);
+	
 	fclose(fPtr);
 }
 
@@ -842,7 +865,7 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 		clGetDeviceInfo(devicePtrCPU[i], CL_DEVICE_MAX_CLOCK_FREQUENCY, sizeof(buf_freq), &buf_freq, NULL);
 		printf("DEVICE_MAX_CLOCK_FREQUENCY = %u\n", (unsigned int)buf_freq);
 		clGetDeviceInfo(devicePtrCPU[i], CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(buf_mem), &buf_mem, NULL);
-		printf("DEVICE_GLOBAL_MEM_SIZE = %llu\n", (unsigned long long)buf_mem);
+		printf("DEVICE_GLOBAL_MEM_SIZE = %lu\n", (unsigned long)buf_mem);
 
 		size_t buf_wi_size[3];
 		clGetDeviceInfo(devicePtrCPU[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, sizeof(buf_wi_size), &buf_wi_size, NULL);
@@ -866,9 +889,9 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_CLOCK_FREQUENCY, sizeof(buf_freq), &buf_freq, NULL);
 		printf("DEVICE_MAX_CLOCK_FREQUENCY = %u\n", (unsigned int)buf_freq);
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(buf_mem), &buf_mem, NULL);
-		printf("DEVICE_GLOBAL_MEM_SIZE = %llu\n", (unsigned long long)buf_mem);
+		printf("DEVICE_GLOBAL_MEM_SIZE = %lu\n", (unsigned long)buf_mem);
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE, sizeof(buf_mem), &buf_mem, NULL);
-		printf("CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE = %llu\n", (unsigned long long)buf_mem);
+		printf("CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE = %lu\n", (unsigned long)buf_mem);
 
 		clGetDeviceInfo(devicePtrGPU[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, 3*sizeof(size_t), &hostDat->WorkItemSizes, NULL);
 		printf("CL_DEVICE_MAX_WORK_ITEM_SIZES = %lu %lu %lu \n", (unsigned long)hostDat->WorkItemSizes[0],
@@ -892,7 +915,7 @@ void analyse_platform(cl_device_id* devices, host_param_struct* hostDat)
 
 	// Use default devices for now
 	devices[0] = devicePtrCPU[0];
-	devices[1] = devicePtrGPU[0];
+	devices[1] = devicePtrGPU[chosenOne];
 
 	free(platforms);
 	free(platformName);
@@ -1078,65 +1101,6 @@ int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq)
 	return 0;
 }
 
-float compute_tau(int viscosityModel, float srtII, cl_float NewtonianTau, cl_float* nonNewtonianParams)
-{
-	float tau = NewtonianTau;
-
-	if (viscosityModel == VISC_POWER_LAW) {
-
-		float k = nonNewtonianParams[0];
-		float n = nonNewtonianParams[1];
-		float nu;
-
-		// Faster to check for common values than to use pow() always
-		if (n == 0.5f) {
-			nu = k/sqrt(srtII);
-		}
-		else if (n == 1.0f) {
-			nu = k;
-		}
-		else if (n == 2.0f) {
-			nu = k*srtII;
-		}
-		else {
-			nu = k*pow(srtII,n-1.0f);
-		}
-
-		tau = 3.0f*nu + 0.5f;
-	}
-	else if (viscosityModel == VISC_CASSON) {
-
-		float tau_Y = nonNewtonianParams[0];
-		float eta_inf = nonNewtonianParams[1];
-
-		float nu = (sqrt(tau_Y/srtII) + sqrt(eta_inf))*(sqrt(tau_Y/srtII) + sqrt(eta_inf));
-		tau = 3.0f*nu + 0.5f;
-
-	}
-	else if (viscosityModel == VISC_HB) {
-		float tau_Y = nonNewtonianParams[0];
-		float k = nonNewtonianParams[1];
-		float n = nonNewtonianParams[2];
-		float nu;
-
-		if (n == 0.5f) {
-			nu = tau_Y/srtII + k/sqrt(srtII);
-		}
-		else if (n == 1.0f) {
-			nu = tau_Y/srtII + k;
-		}
-		else if (n == 2.0f) {
-			nu = tau_Y/srtII + k*srtII;
-		}
-		else {
-			nu = tau_Y/srtII + k*pow(srtII,n-1.0f);
-		}
-
-		tau = 3.0f*nu + 0.5f;
-	}
-
-	return tau;
-}
 
 void read_program_source(char** programSourcePtr, const char* programName)
 {
@@ -1223,14 +1187,15 @@ int error_check(cl_int err, char* clFunc, int print)
 			case -67: printf("%s\n", "CL_INVALID_LINKER_OPTIONS"); break;
 			case -68: printf("%s\n", "CL_INVALID_DEVICE_PARTITION_COUNT"); break;
 		}
-		exit(0);
+		//exit(0);
+		return 1;
 	}
 	else if (print == 1) {
 		printf("Call to %s success (%d) \n", clFunc, err);
-		return 1;
+		return 0;
 	}
 	else {
-		return 1;
+		return 0;
 	}
 }
 

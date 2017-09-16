@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 
+
 #ifdef __APPLE__
 #include <OpenCL/opencl.h>
 #else
@@ -89,6 +90,7 @@ typedef struct {
 	int FluidOutputSpacing;
 	int TangentialVelBC[3];
 	int ShearStressFreq;
+	float RandParticleShift;
 
 } host_param_struct;
 
@@ -114,8 +116,17 @@ typedef struct {
 } input_data_struct;
 
 
-int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_command_queue* CPU_QueuePtr, cl_command_queue* GPU_QueuePtr,
-	cl_context* contextPtr, cl_program* programCPU, cl_program* programGPU);
+typedef struct {
+
+	int ShearStressCount;
+	float ShearStressAvg;
+	float ActualShearRate;
+
+} output_data_struct;
+
+
+//int simulation_main(host_param_struct* hostDat, cl_device_id* devices, cl_command_queue* CPU_QueuePtr, cl_command_queue* GPU_QueuePtr,
+//	cl_context* contextPtr, cl_program* programCPU, cl_program* programGPU);
 	
 void particle_dynamics(int_param_struct* intDat, cl_float4* parKinematics_h, cl_float4* parForces_h);
 
@@ -146,7 +157,8 @@ int write_lattice_field(cl_float* u_h, int_param_struct* intDat);
 
 void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float4* parKin, FILE* vidPtr, int frame);
 
-void compute_shear_stress(host_param_struct* hostDat, int_param_struct* intDat, cl_float* u_h, cl_float* tau_lb_h, int frame);
+void compute_shear_stress(output_data_struct* outDat, host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
+	cl_float* u_h, cl_float* tau_lb_h, int frame);
 
 int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_context* contextPtr, cl_device_id* devices,
 	cl_program* programCPU, cl_program* programGPU);

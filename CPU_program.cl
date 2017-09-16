@@ -4,6 +4,18 @@
 #define PAR_COL_HARMONIC 1
 #define PAR_COL_LJ 2
 
+#ifndef M_PI
+	#define M_PI 3.14159265358979323846
+#endif
+
+#define VISC_NEWTONIAN 1
+#define VISC_POWER_LAW 2
+#define VISC_HB 3
+#define VISC_CASSON 4
+
+#define MIN_SEP 0.1
+#define SQUEEZE_RANGE 0.1
+
 typedef struct {
 
 	int MaxIterations;
@@ -54,8 +66,9 @@ typedef struct {
 
 	float DirectForcingCoeff;
 
-} flp_param_struct;
+} flp_param_struct; 
 
+float compute_squeeze_force(int viscosityModel, float vRel, float minSep, float rp, float NewtonianTau, __global float* nonNewtonianParams);
 
 __kernel void particle_particle_forces(
 	__global int_param_struct* intDat,
@@ -70,8 +83,13 @@ __kernel void particle_particle_forces(
 	__global int* numParInZone)
 {
 	int threadID = get_global_id(0);
-	//printf("threadID = %d\n", threadID);
-	//printf("numParInThread[threadID] = %d\n", numParInThread[threadID]);
+	int np = intDat->NumParticles;
+	float rp = flpDat->ParticleDiam/2.0f;
+	
+	int N_x = intDat->LatticeSize[0];
+	int N_y = intDat->LatticeSize[1];
+	int N_z = intDat->LatticeSize[2];
+	float4 w = (float4){N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f};
 
 	for(int i = 0; i < numParInThread[threadID]; i++)
 	{
@@ -91,19 +109,35 @@ __kernel void particle_particle_forces(
 
 			for (int j = 0; j < numParInZone[zoneID]; j++) {
 
-				int pj = zoneMembers[zoneID*intDat->NumParticles + j];
+				int pj = zoneMembers[zoneID*np + j];
 				//printf("pj = %d\n", pj);
 
 				if (pi > pj) {
 					//printf("Testing for collision between particles %d and %d\n", pi, pj);
+					
 					// Distance
 					float4 rij = parKin[pj] - parKin[pi];
-					float rSep = length(rij);
-					float4 eij = rij/rSep; // Normalized vector pointing from i to j
+					// Correct each component for pbc 
+					int signX = (rij.x < 0.0f) ? -1 : (rij.x > 0.0f);
+					int signY = (rij.y < 0.0f) ? -1 : (rij.y > 0.0f);
+					int signZ = (rij.z < 0.0f) ? -1 : (rij.z > 0.0f);
+					//printf("    rij, |r| = (%f,%f,%f)\n", rij.x, rij.y, rij.z);
+					rij.x = (fabs(rij.x) < w.x/2.0f) ? rij.x : (rij.x - (float)signX*w.x);
+					rij.y = (fabs(rij.y) < w.y/2.0f) ? rij.y : (rij.y - (float)signY*w.y);
+					rij.z = (fabs(rij.z) < w.z/2.0f) ? rij.z : (rij.z - (float)signZ*w.z);
+					//printf("pbc rij, |r| = (%f,%f,%f)\n", rij.x, rij.y, rij.z);
+					
+					float rSep = length(rij); // 4th component needs to be zero, which it should be
+					
+					// Relative velocity
+					float4 vij = parKin[pj + np] - parKin[pi + np];
+					
+					float minSep = rSep - 2*rp;	// Closest approach between spheres
+					float4 eij = rij/rSep;
+					float vRel = -(eij.x*vij.x + eij.y*vij.y + eij.z*vij.z); // Positive if spheres approaching
+					//printf("vRel = (%f,%f,%f) %f\n", vij.x, vij.y, vij.z, vRel);
 
-					//printf("rij, |r| = (%f,%f,%f) %f\n", rij.x, rij.y, rij.z, rSep);
-
-					float overlap = flpDat->ParticleDiam - rSep;
+					float overlap = -minSep;
 					//printf("overlap = %f\n", overlap);
 
 					if (overlap > 0 && intDat->ParForceModel == PAR_COL_HARMONIC) { // Harmonic f = k.x
@@ -115,6 +149,20 @@ __kernel void particle_particle_forces(
 						// Update forces (no torque contribution)
 						parForce[pi] -= eij*fMag;
 						parForce[pj] += eij*fMag; // Need to make safe against race conditions
+					}
+					
+					
+					// Squeeze force
+					if (minSep > 0 && minSep < SQUEEZE_RANGE*rp) { // Harmonic f = k.x
+						
+						float sqForce = compute_squeeze_force(intDat->ViscosityModel, vRel, minSep, rp, 
+							flpDat->NewtonianTau, &(flpDat->ViscosityParams[0]));
+							
+						//printf("Squeeze force = %f\n", sqForce);
+							
+						parForce[pi] -= eij*sqForce;
+						parForce[pj] += eij*sqForce;
+						
 					}
 				}
 			}
@@ -145,7 +193,11 @@ __kernel void particle_dynamics(
 	int threadID = get_global_id(0);
 	int np = intDat->NumParticles;
 	int nfa = intDat->NumForceArrays;
-
+	
+	//printf("ThreadID = %d\n", threadID);
+	//printf("numParInThread[threadID] = %d\n", numParInThread[threadID]);
+	//printf("threadMembers_h[%d*intDat.NumParticles] = %d\n", threadID, threadMembers[threadID*intDat->NumParticles]);
+		
 	int N_x = intDat->LatticeSize[0];
 	int N_y = intDat->LatticeSize[1];
 	int N_z = intDat->LatticeSize[2];
@@ -153,7 +205,8 @@ __kernel void particle_dynamics(
 
 	for(int i = 0; i < numParInThread[threadID]; ++i)
 	{
-		int p = threadMembers[i];
+		int p = threadMembers[threadID*intDat->NumParticles + i];
+		//printf("Updating particle %d\n", p);
 
 		float4 accel = (float4){0.0f, 0.0f, 0.0f, 0.0f};
 		float4 angAccel = (float4){0.0f, 0.0f, 0.0f, 0.0f};
@@ -256,4 +309,32 @@ __kernel void update_particle_zones(
 
 	// Add to zone, atomic increment particle counter (must be reset)
 
+}
+
+
+
+float compute_squeeze_force(int viscosityModel, float vRel, float minSep, float rp, float NewtonianTau, __global float* nonNewtonianParams)
+{
+	float rStar = rp/2.0f;
+	minSep = minSep < MIN_SEP ? MIN_SEP : minSep;
+	float force = 0.0;
+	
+	if (viscosityModel == VISC_NEWTONIAN) {
+		
+		float eta0 = (NewtonianTau-0.5f)/3.0f;
+		force = 6*M_PI*eta0*rStar*rStar*vRel/minSep;
+	}
+	else if (viscosityModel == VISC_POWER_LAW) {
+
+
+	}
+	else if (viscosityModel == VISC_CASSON) {
+
+
+	}
+	else if (viscosityModel == VISC_HB) {
+		
+	}
+
+	return force;
 }
