@@ -110,6 +110,18 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 	printf("%s %s\n", "Initial distribution type ", hostDat->InitialDist);
 
 	int NumNodes = intDat->LatticeSize[0]*intDat->LatticeSize[1]*intDat->LatticeSize[2];
+	
+	// Set system size
+	for (int dim = 0; dim < 3; dim++) {
+		
+		if (intDat->BoundaryConds[dim] == 0) {
+			intDat->SystemSize[dim] = intDat->LatticeSize[dim] - 2*intDat->BufferSize[dim];
+		}
+		else {
+			intDat->SystemSize[dim] = intDat->LatticeSize[dim] - 2*intDat->BufferSize[dim] - 1;
+		}
+		printf("System size in dimension %d = %d\n", dim, intDat->SystemSize[dim]);
+	}
 
 	if (strstr(hostDat->InitialDist, "poiseuille") != NULL)
 	{
@@ -206,7 +218,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		float sp[3]; // Spacing
 		if (gridSize > 1) {
 			for (int i = 0; i < 3; i++) {
-				sp[i] = intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1 - 2*pb;
+				sp[i] = intDat->SystemSize[i] - 2*pb;
 				sp[i] /= (gridSize-1);
 			}
 		}
@@ -228,8 +240,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	else if (hostDat->InitialParticleDistribution == 2){
 		// NxNxM Lattice
 		float pb = hostDat->ParticleBuffer;
-		float wM = intDat->LatticeSize[2]-pb-1;
-		float wN = intDat->LatticeSize[0]-pb-1;
+		float wM = intDat->SystemSize[2]-pb;
+		float wN = intDat->SystemSize[0]-pb;
 
 		int mdn = (int)ceil(wM/wN);
 
@@ -243,9 +255,9 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 
 		float sp[3]; // Spacing
 		if (np > 1) {
-				sp[0] = (intDat->LatticeSize[0]-2*intDat->BufferSize[0]-1 - 2*pb)/(n-1);
-				sp[1] = (intDat->LatticeSize[1]-2*intDat->BufferSize[1]-1 - 2*pb)/(n-1);
-				sp[2] = (intDat->LatticeSize[2]-2*intDat->BufferSize[2]-1 - 2*pb)/(n*mdn-1);
+				sp[0] = (intDat->SystemSize[0] - 2*pb)/(n-1);
+				sp[1] = (intDat->SystemSize[1] - 2*pb)/(n-1);
+				sp[2] = (intDat->SystemSize[2] - 2*pb)/(n*mdn-1);
 		}
 		else {
 			for (int i = 0; i < 3; i++) {
@@ -274,8 +286,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		}
 		// Position and velocity
 		float px = hostDat->ParticleBuffer;
-		float py = ((float)intDat->LatticeSize[1]-3)/2.0f;
-		float pz = ((float)intDat->LatticeSize[2]-3)/2.0f;
+		float py = ((float)intDat->SystemSize[1])/2.0f;
+		float pz = ((float)intDat->SystemSize[2])/2.0f;
 		parKinematics[0] = (cl_float4){{px, py, pz, 0.0f}};
 		parKinematics[1] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 		printf("Placing single particle at position %f %f %f\n", px, py, pz);
@@ -313,7 +325,7 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		vMax = vMax < fabsf(flpDat->VelUpper[i]) ? fabsf(flpDat->VelUpper[i]) : vMax;
 		vMax = vMax < fabsf(flpDat->VelLower[i]) ? fabsf(flpDat->VelLower[i]) : vMax;
 		float nu = (flpDat->NewtonianTau-0.5f)/3.0f;
-		float vMaxNewt = flpDat->ConstBodyForce[i]*(intDat->LatticeSize[i]-3.0f)*(intDat->LatticeSize[i]-3.0f)/(12.0f*nu);
+		float vMaxNewt = flpDat->ConstBodyForce[i]*(intDat->SystemSize[i])*(intDat->SystemSize[i])/(12.0f*nu);
 		vMax = vMax < vMaxNewt ? vMaxNewt : vMax;
 	}
 	printf("\nEstimated max particle velocity = %f\n", vMax);
@@ -329,9 +341,9 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 	// Compute number of zones in each dimension
 	for (int i = 0; i < 3; i++) {
 		// Total size in i'th dimension
-		float w = (float)(intDat->LatticeSize[i]-2*intDat->BufferSize[i]-1);
+		float w = (float)(intDat->SystemSize[i]);
 		intDat->NumZones[i] = floor(w/minZoneWidth) > 0 ? (int)floor(w/minZoneWidth) : 1;
-		flpDat->ZoneWidth[i] = w/intDat->NumZones[i];
+		flpDat->ZoneWidth[i] = w/(float)intDat->NumZones[i];
 		printf("Number of particle zones in dimension %d = %d\n", i, intDat->NumZones[i]);
 	}
 	printf("\nActual particle neighbor zone width = %f x %f x %f\n", flpDat->ZoneWidth[0], flpDat->ZoneWidth[1], flpDat->ZoneWidth[2]);

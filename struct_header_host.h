@@ -6,7 +6,10 @@ typedef struct {
 	cl_int MaxIterations;
 	
 	cl_int BasisVel[19][3];
+	
 	cl_int LatticeSize[3];
+	cl_int SystemSize[3];
+	
 	cl_int BufferSize[3];
 	cl_int BoundaryConds[3];
 	cl_int NumZones[3];

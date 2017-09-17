@@ -21,7 +21,10 @@ typedef struct {
 	int MaxIterations;
 
 	int BasisVel[19][3];
+	
 	int LatticeSize[3];
+	int SystemSize[3];
+	
 	int BufferSize[3];
 	int BoundaryConds[3];
 	int NumZones[3];
@@ -89,7 +92,7 @@ __kernel void particle_particle_forces(
 	int N_x = intDat->LatticeSize[0];
 	int N_y = intDat->LatticeSize[1];
 	int N_z = intDat->LatticeSize[2];
-	float4 w = (float4){N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f};
+	float4 w = (float4)(intDat->SystemSize[0], intDat->SystemSize[1], intDat->SystemSize[2], 1.0f); 
 
 	for(int i = 0; i < numParInThread[threadID]; i++)
 	{
@@ -168,12 +171,12 @@ __kernel void particle_particle_forces(
 			}
 		}
 		
-		// Particle-wall collisions
+		// Particle-wall collisions (z-wall only)
 		float lowerOverlap = flpDat->ParticleZBuffer - parKin[pi].z;
 		if (lowerOverlap > 0) {
 			parForce[pi].z += flpDat->ParForceParams[0]*lowerOverlap;
 		}
-		float upperOverlap = parKin[pi].z - ((float)intDat->LatticeSize[2]-flpDat->ParticleZBuffer-3.0f);
+		float upperOverlap = parKin[pi].z - ((float)intDat->SystemSize[2]-flpDat->ParticleZBuffer);
 		if (upperOverlap > 0) {
 			parForce[pi].z -= flpDat->ParForceParams[0]*upperOverlap;
 		}
@@ -201,7 +204,7 @@ __kernel void particle_dynamics(
 	int N_x = intDat->LatticeSize[0];
 	int N_y = intDat->LatticeSize[1];
 	int N_z = intDat->LatticeSize[2];
-	float4 w = (float4){N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f}; // w is set to 1 to avoid nan when using fmod()
+	float4 w = (float4)(intDat->SystemSize[0], intDat->SystemSize[1], intDat->SystemSize[2], 1.0f); 
 
 	for(int i = 0; i < numParInThread[threadID]; ++i)
 	{
@@ -295,7 +298,7 @@ __kernel void update_particle_zones(
 		int p = threadMembers[i + threadID*intDat->NumParticles];
 
 		// Particles always belong to their initial thread
-		int zoneIDx = (int)(parKin[p].x/flpDat->ZoneWidth[0]); 
+		int zoneIDx = (int)(parKin[p].x/flpDat->ZoneWidth[0]);
 		int zoneIDy = (int)(parKin[p].y/flpDat->ZoneWidth[1]);
 		int zoneIDz = (int)(parKin[p].z/flpDat->ZoneWidth[2]);
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);

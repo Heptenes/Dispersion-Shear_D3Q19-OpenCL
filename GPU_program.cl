@@ -21,7 +21,10 @@ typedef struct {
 	int MaxIterations;
 
 	int BasisVel[19][3];
+	
 	int LatticeSize[3];
+	int SystemSize[3];
+	
 	int BufferSize[3];
 	int BoundaryConds[3];
 	int NumZones[3];
@@ -94,6 +97,10 @@ __kernel void particle_fluid_forces_linear_stencil(
 
 	int groupID = get_group_id(0);
 	int numGroups = get_num_groups(0);
+	
+	float4 sysSize = (float4)(intDat->SystemSize[0], intDat->SystemSize[1], intDat->SystemSize[2], 1.0f); 
+	//printf("w = %f %f %f (%f)\n", w.x, w.y, w.z, w.w);
+	// .w is set to 1 to avoid nan when using fmod()
 
 	//printf("globalID, globalSize  %d  %d\n", globalID, globalSize);
 	//printf("localID, localSize    %d  %d\n", localID, localSize);
@@ -133,48 +140,61 @@ __kernel void particle_fluid_forces_linear_stencil(
 	// Absolute position of point
 	float4 r_p = xPar + r_0;
 
-	// Adjust for periodic BCs (assume buffer of 1 unit for now)
-	float4 w = (float4)(N_x-3.0f, N_y-3.0f, N_z-3.0f, 1.0f); // w is set to 1 to avoid nan when using fmod()
-	float4 r_pp = fmod((r_p+w),w);
+	// Adjust for PBCs
+	float4 r_pp = fmod((r_p+sysSize),sysSize);
 
 	//printf("point = %d, r_p = %f %f %f (%f)\n", pointID, r_p.x, r_p.y, r_p.z, r_p.w);
 	//printf("point = %d, r_pp = %f %f %f (%f)\n", pointID, r_pp.x, r_pp.y, r_pp.z, r_pp.w);
 
-	// Location of corner closest to origin
-	int x_i0 = (int)floor(r_pp.x) + intDat->BufferSize[0];
-	int y_i0 = (int)floor(r_pp.y) + intDat->BufferSize[1];
-	int z_i0 = (int)floor(r_pp.z) + intDat->BufferSize[2];
+	// Location of corner closest to origin in f array
+	int flX = (int)floor(r_pp.x);
+	int flY = (int)floor(r_pp.y);
+	int flZ = (int)floor(r_pp.z);
+	
+	int x_i0 = flX + intDat->BufferSize[0];
+	int y_i0 = flY + intDat->BufferSize[1];
+	int z_i0 = flZ + intDat->BufferSize[2];
+	//printf("point = %d, r_floor = %d %d %d\n", pointID, x_i0, y_i0, z_i0);
 
-	//printf("point = %d, r_floor = %d %d %d\n", pointID, x_0, y_0, z_0);
-
-	// Linear stencil interpolation weightings
-	int sten[8][3] = {{0,0,0}, {1,0,0}, {0,1,0}, {0,0,1}, {1,1,0}, {1,0,1}, {0,1,1}, {1,1,1}};
+	// Shift taking into account pbcs
+	int xs = (x_i0 == N_x-2) ? -(N_x-3) : 1; // -(N_x-3) is edge case, where neighbor is across pbc
+	int ys = (y_i0 == N_y-2) ? -(N_y-3) : 1;
+	int zs = (z_i0 == N_z-2) ? -(N_z-3) : 1;
+	
+	int shift[8][3] = {{0,0,0}, {xs,0,0}, {0,ys,0}, {0,0,zs}, {xs,ys,0}, {xs,0,zs}, {0,ys,zs}, {xs,ys,zs}};
+	
+	float wx = 1.0f - (r_pp.x - flX);
+	float wy = 1.0f - (r_pp.y - flY);
+	float wz = 1.0f - (r_pp.z - flZ);
+	
 	float weights[8];
+	weights[0] = wx*wy*wz;
+	weights[1] = (1.0f-wx)*wy*wz;
+	weights[2] = wx*(1.0f-wy)*wz;
+	weights[3] = wx*wy*(1.0f-wz);
+	weights[4] = (1.0f-wx)*(1.0f-wy)*wz;
+	weights[5] = (1.0f-wx)*wy*(1.0f-wz);
+	weights[6] = wx*(1.0f-wy)*(1.0f-wz);
+	weights[7] = (1.0f-wx)*(1.0f-wy)*(1.0f-wz);
+		
 	float4 u_pp = (float4){0.0f, 0.0f, 0.0f, 0.0f};
 
 	//float sumW = 0.0;
 	for(int n = 0; n < 8; n++) {
 		//
-		int x_n = x_i0 + sten[n][0];
-		int y_n = y_i0 + sten[n][1];
-		int z_n = z_i0 + sten[n][2];
+		int x_n = x_i0 + shift[n][0];
+		int y_n = y_i0 + shift[n][1];
+		int z_n = z_i0 + shift[n][2];
 		int i_1D = x_n + N_x*(y_n + N_y*z_n);
+		//printf("shift[%d][0:2] = %d %d %d\n", n, shift[n][0], shift[n][1], shift[n][2]);
 
-		float wx = 1.0f - fabs(r_pp.x + 1.0f - (float)x_n);
-		float wy = 1.0f - fabs(r_pp.y + 1.0f - (float)y_n);
-		float wz = 1.0f - fabs(r_pp.z + 1.0f - (float)z_n);
-		//printf("x_n, shifted r_pp.x, wx: %d, %f, %f\n", x_n, r_pp.x + 1.0f, wx);
-
-		weights[n] = wx*wy*wz;
 		//sumW += weights[n];
-
 		// Interpolate velocity
 		u_pp.x += weights[n]*u[i_1D        ];
 		u_pp.y += weights[n]*u[i_1D +   N_C];
 		u_pp.z += weights[n]*u[i_1D + 2*N_C];
 	}
 	//printf("weight sum: %f\n", sumW);
-	//printf("point = %d, u_pp = %f %f %f (%f)\n", pointID, u_pp.x, u_pp.y, u_pp.z, u_pp.w);
 
 	// Calculate velocity of node
 	float4 v_pp = vPar + cross(angVel,r_0); // Order is important
@@ -189,9 +209,9 @@ __kernel void particle_fluid_forces_linear_stencil(
 	// Distribute force to 8 nodes
 	for(int n = 0; n < 8; n++) {
 		//
-		int x_n = x_i0 + sten[n][0];
-		int y_n = y_i0 + sten[n][1];
-		int z_n = z_i0 + sten[n][2];
+		int x_n = x_i0 + shift[n][0];
+		int y_n = y_i0 + shift[n][1];
+		int z_n = z_i0 + shift[n][2];
 		int i_1D = x_n + N_x*(y_n + N_y*z_n);
 
 		int writeCount = atomic_inc(countPoint+i_1D); // The p'th time a surface point writes to this node

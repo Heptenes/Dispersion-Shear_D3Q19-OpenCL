@@ -365,7 +365,6 @@ int main(int argc, char *argv[])
 
 					clEnqueueNDRangeKernel(queueGPU, kernelDat.boundary_velocity, 3,
 						lattice_work_offset, tanBC_work_size, NULL, 0, NULL, NULL);
-
 				}
 			}
 			clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &wallAxis);
