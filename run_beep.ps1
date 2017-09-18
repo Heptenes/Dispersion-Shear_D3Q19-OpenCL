@@ -1,7 +1,7 @@
 
-.\gcc_out.exe
+.\d3q19_windows.exe
 
-[System.Console]::Beep(450, 110)
-[System.Console]::Beep(500, 110)
-[System.Console]::Beep(550, 110)
+[System.Console]::Beep(450, 200)
+[System.Console]::Beep(500, 200)
+[System.Console]::Beep(550, 200)
 

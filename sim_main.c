@@ -117,48 +117,74 @@ int main(int argc, char *argv[])
 	cl_int err_cl = CL_SUCCESS;
 	fA_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, fDataSize, NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer fA", 1);
+	
 	fB_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, fDataSize, NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer fB", 1);
+	
 	u_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, a3DataSize, NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer u_cl", 1);
+	
 	gpf_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, a3DataSize*intDat.MaxSurfPointsPerNode, NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer gpf_cl", 1);
+	
 	countPoint_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, numNodes*sizeof(cl_int), NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer countPoint_cl", 1);
+	
 	tau_lb_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, &err_cl);
-	error_check(err_cl, "clCreateBuffer 1", 1);
+	error_check(err_cl, "clCreateBuffer tau_lb_cl", 1);
 
 	// Particle arrays (host accessible)
-	err_cl = CL_SUCCESS;
 	parKin_cl = clCreateBuffer(contextSim, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, parV4DataSize*4, parKin_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer parKin_cl", 1);
+	
 	parForce_cl = clCreateBuffer(contextSim, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, parV4DataSize*2, parForce_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer parForce_cl", 1);
+	
 	parFluidForce_cl = clCreateBuffer(contextSim, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, parV4DataSize*intDat.NumForceArrays*2, parFluidForce_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer parFluidForce_cl", 1);
+	
 	parsZone_cl = clCreateBuffer(contextSim, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, intDat.NumParticles*sizeof(cl_int), parsZone_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer parsZone_cl", 1);
+	
 	zoneMembers_cl = clCreateBuffer(contextSim, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, totalNumZones*intDat.NumParticles*sizeof(cl_int), zoneMembers_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer zoneMembers_cl", 1);
+	
 	numParInZone_cl = clCreateBuffer(contextSim, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, totalNumZones*sizeof(cl_int), numParInZone_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer numParInZone_cl", 1);
+	
 	parFluidForceSum_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, numSurfPoints*sizeof(cl_float4)*2, NULL, &err_cl);
-	error_check(err_cl, "clCreateBuffer 2", 1);
+	error_check(err_cl, "clCreateBuffer parFluidForceSum_cl", 1);
 	
 	// Read-only buffers
-	err_cl = CL_SUCCESS;
 	threadMembers_cl = clCreateBuffer(contextSim,
 		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, numParThreads*intDat.NumParticles*sizeof(cl_int), threadMembers_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer threadMembers_cl", 1);
+	
 	numParInThread_cl = clCreateBuffer(contextSim,
 		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, numParThreads*sizeof(cl_int), numParInThread_h, &err_cl);
+	error_check(err_cl, "clCreateBuffer numParInThread_cl", 1);
+	
 	zoneNeighDat_cl = clCreateBuffer(contextSim,
 		CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, 28*totalNumZones*sizeof(cl_int), zoneNeighDat_h, &err_cl);
-	error_check(err_cl, "clCreateBuffer 3", 1);
+	error_check(err_cl, "clCreateBuffer zoneNeighDat_cl", 1);
 	
 	intDat_cl = clCreateBuffer(contextSim, CL_MEM_READ_ONLY, sizeof(int_param_struct), NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer intDat_cl", 1);
+	
 	flpDat_cl = clCreateBuffer(contextSim, CL_MEM_READ_ONLY, sizeof(flp_param_struct), NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer flpDat_cl", 1);
+	
 	strMap_cl = clCreateBuffer(contextSim, CL_MEM_READ_ONLY, smDataSize, NULL, &err_cl);
+	error_check(err_cl, "clCreateBuffer strMap_cl", 1);
+	
 	spherePoints_cl = clCreateBuffer(contextSim, CL_MEM_READ_ONLY, intDat.PointsPerParticle*sizeof(cl_float4), NULL, &err_cl);
-	error_check(err_cl, "clCreateBuffer 4", 1);
+	error_check(err_cl, "clCreateBuffer spherePoints_cl", 1);
 
 	// --- WRITE BUFFERS --------------------------------------------------------
 	err_cl = CL_SUCCESS;
@@ -282,9 +308,10 @@ int main(int argc, char *argv[])
 	FILE* vidPtr;
 	vidPtr = fopen ("xyz_ovito_output.txt","w");
 	printf("%s %d\n", "Starting iteration 1, maximum iterations", intDat.MaxIterations);
+	
 	for (int t=1; t<=intDat.MaxIterations; t++) {
 
-		int toPrint = (t%hostDat.ConsolePrintFreq == 0) ? 1 : 0;
+		int toPrint = (t%hostDat.ConsolePrintFreq == 1);
 
 		if (toPrint) {
 			printf("%s %d\n", "Starting iteration", t);

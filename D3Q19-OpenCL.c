@@ -293,7 +293,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 				}
 				
 				if (safePos == 1) {
-					printf("Placing particle at position %f %f %f\n", px, py, pz);
+					//printf("Placing particle at position %f %f %f\n", px, py, pz);
 					parKinematics[p     ] = testPos;
 					parKinematics[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 					parPlaced = 1;
@@ -388,11 +388,11 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		int thread = (int)(numParThreads*p)/intDat->NumParticles;
 		int np = numParInThread[thread]++;
 		threadMembers[thread*intDat->NumParticles + np] = p;
-		printf("Particle %d belongs to thread %d\n", p, thread);
-		printf("Thread %d now has %d particles.\n", thread, np+1);
+		//printf("Particle %d belongs to thread %d\n", p, thread);
+		//printf("Thread %d now has %d particles.\n", thread, np+1);
 
-		printf("Particle %d has position ", p);
-		printf("%f %f %f\n", parKinematics[p].x, parKinematics[p].y, parKinematics[p].z);
+		//printf("Particle %d has position ", p);
+		//printf("%f %f %f\n", parKinematics[p].x, parKinematics[p].y, parKinematics[p].z);
 
 		int zoneIDx = (int)(parKinematics[p].x/flpDat->ZoneWidth[0]);
 		int zoneIDy = (int)(parKinematics[p].y/flpDat->ZoneWidth[1]);
@@ -401,8 +401,8 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 
 		parsZone[p] = zoneID;
 		
-		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID],
-			zoneID, zoneIDx, zoneIDy, zoneIDz);
+		//printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID],
+		//	zoneID, zoneIDx, zoneIDy, zoneIDz);
 		
 		(*zoneMembers)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
 
@@ -669,7 +669,7 @@ void compute_shear_stress(output_data_struct* outDat, host_param_struct* hostDat
 	FILE* fPtr;
 	fPtr = fopen ("velocity_profile_z.txt","w");
 
-	int buffer = 1; // Additional buffer to add before starting finite-difference derivatives
+	int gradBuffer = 1; // Additional buffer to add before starting finite-difference derivatives
 
 	cl_float n_xy = (cl_float)(n_x-2)*(n_y-2);
 
@@ -694,12 +694,12 @@ void compute_shear_stress(output_data_struct* outDat, host_param_struct* hostDat
 				uMean[1] += u_h[i_1D + n_L];
 				uMean[2] += u_h[i_1D + 2*n_L];
 
-				if (i_z == (1+dz+buffer)) {
+				if (i_z == (1+dz+gradBuffer)) {
 					//
 					int i_1D_fd = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*(i_z-dz));
 					dudzMean += (u_h[i_1D]-u_h[i_1D_fd])/dz;
 				}
-				else if (i_z == (n_z-2-buffer)) {
+				else if (i_z == (n_z-2-gradBuffer)) {
 					//
 					int i_1D_fd = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*(i_z-dz));
 					dudzMean += (u_h[i_1D]-u_h[i_1D_fd])/dz;
@@ -726,7 +726,7 @@ void compute_shear_stress(output_data_struct* outDat, host_param_struct* hostDat
 	outDat->ShearStressAvg = (outDat->ShearStressAvg*(count-1) + dudzMean)/count;
 	printf("Shear rate at wall = %e\n", outDat->ShearStressAvg);
 			
-	int intBuffer = (int)(flpDat->ParticleZBuffer + 1E-8); // 
+	int intBuffer = (int)(flpDat->ParticleZBuffer + 1E-8) + (int)(flpDat->ParticleDiam/2); // 
 	int zbL = 1+intBuffer;
 	int zbU = (int)(n_z-2 - intBuffer);
 	
@@ -1224,7 +1224,7 @@ int error_check(cl_int err, char* clFunc, int print)
 			case -67: printf("%s\n", "CL_INVALID_LINKER_OPTIONS"); break;
 			case -68: printf("%s\n", "CL_INVALID_DEVICE_PARTITION_COUNT"); break;
 		}
-		//exit(0);
+		exit(0);
 		return 1;
 	}
 	else if (print == 1) {
