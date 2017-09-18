@@ -204,7 +204,7 @@ __kernel void particle_dynamics(
 	int N_x = intDat->LatticeSize[0];
 	int N_y = intDat->LatticeSize[1];
 	int N_z = intDat->LatticeSize[2];
-	float4 w = (float4)(intDat->SystemSize[0], intDat->SystemSize[1], intDat->SystemSize[2], 1.0f); 
+	float4 w = (float4){intDat->SystemSize[0], intDat->SystemSize[1], intDat->SystemSize[2], 1.0f}; 
 
 	for(int i = 0; i < numParInThread[threadID]; ++i)
 	{
@@ -301,7 +301,7 @@ __kernel void update_particle_zones(
 		int zoneIDx = (int)(parKin[p].x/flpDat->ZoneWidth[0]);
 		int zoneIDy = (int)(parKin[p].y/flpDat->ZoneWidth[1]);
 		int zoneIDz = (int)(parKin[p].z/flpDat->ZoneWidth[2]);
-		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
+		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[1]*zoneIDz);
 		//printf("ZoneID x,y,z = %d,%d,%d", zoneIDx, zoneIDy, zoneIDz);
 
 		parsZone[p] = zoneID;

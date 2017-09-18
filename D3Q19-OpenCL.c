@@ -240,8 +240,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	else if (hostDat->InitialParticleDistribution == 2){
 		// NxNxM Lattice
 		float pb = hostDat->ParticleBuffer;
-		float wM = intDat->SystemSize[2]-pb;
-		float wN = intDat->SystemSize[0]-pb;
+		float wN = intDat->SystemSize[0]-2*pb;
+		float wM = intDat->SystemSize[2]-2*(pb+flpDat->ParticleZBuffer);
 
 		int mdn = (int)ceil(wM/wN);
 
@@ -257,7 +257,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		if (np > 1) {
 				sp[0] = (intDat->SystemSize[0] - 2*pb)/(n-1);
 				sp[1] = (intDat->SystemSize[1] - 2*pb)/(n-1);
-				sp[2] = (intDat->SystemSize[2] - 2*pb)/(n*mdn-1);
+				sp[2] = (intDat->SystemSize[2] - 2*(pb + flpDat->ParticleZBuffer))/(n*mdn-1);
 		}
 		else {
 			for (int i = 0; i < 3; i++) {
@@ -268,13 +268,37 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		printf("Lattice spacing = %f x %f x %f\n", sp[0], sp[1], sp[2]);
 
 		for(int p = 0; p < np; p++) {
-			cl_float px = pb + sp[0]*(p/(n*m)) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
-			cl_float py = pb + sp[1]*((p/m)%n) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
-			cl_float pz = pb + sp[2]*(p%m) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
-			// Position and velocity
-			//printf("Placing particle at position %f %f %f\n", px, py, pz);
-			parKinematics[p     ] = (cl_float4){{px, py, pz, 0.0f}};
-			parKinematics[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
+			int parPlaced = 0;
+			
+			while (parPlaced == 0) {
+				
+				cl_float px = pb + sp[0]*(p/(n*m)) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
+				cl_float py = pb + sp[1]*((p/m)%n) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
+				cl_float pz = pb + flpDat->ParticleZBuffer + sp[2]*(p%m) + hostDat->RandParticleShift*(2*rand()/(float)RAND_MAX - 1);
+				cl_float4 testPos = (cl_float4){{px, py, pz, 0.0f}};
+				
+				// Check overlap
+				int safePos = 1;
+				for(int p2 = 0; p2 < p; p2++) {
+					
+					float rijX = parKinematics[p2].x - testPos.x;
+					float rijY = parKinematics[p2].y - testPos.y;
+					float rijZ = parKinematics[p2].z - testPos.z;
+					
+					float sepSq = rijX*rijX +  rijY*rijY +  rijZ*rijZ;
+					
+					if (sepSq < flpDat->ParticleDiam*flpDat->ParticleDiam) {
+						safePos = 0;
+					}
+				}
+				
+				if (safePos == 1) {
+					printf("Placing particle at position %f %f %f\n", px, py, pz);
+					parKinematics[p     ] = testPos;
+					parKinematics[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
+					parPlaced = 1;
+				}
+			}	
 		}
 	}
 	else if (hostDat->InitialParticleDistribution == 3) {
@@ -373,14 +397,15 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		int zoneIDx = (int)(parKinematics[p].x/flpDat->ZoneWidth[0]);
 		int zoneIDy = (int)(parKinematics[p].y/flpDat->ZoneWidth[1]);
 		int zoneIDz = (int)(parKinematics[p].z/flpDat->ZoneWidth[2]);
-		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[2]*zoneIDz);
+		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[1]*zoneIDz);
 
 		parsZone[p] = zoneID;
 		
-		(*zoneMembers)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
-		//
 		printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID],
 			zoneID, zoneIDx, zoneIDy, zoneIDz);
+		
+		(*zoneMembers)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
+
 	}
 
 	// Loop over zones and add neighbors (x on inner loop to match GPU arrays)
@@ -390,7 +415,7 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 			//
 			for (int i = 0; i < intDat->NumZones[0]; i++) {
 
-				int zoneID = i + intDat->NumZones[0]*(j + intDat->NumZones[2]*k);
+				int zoneID = i + intDat->NumZones[0]*(j + intDat->NumZones[1]*k);
 				(*zoneNeighDat)[28*zoneID] = 0;
 
 				int lm = -1; int lp = 1; int mm = -1; int mp = 1; int nm = -1; int np = 1;
@@ -644,68 +669,72 @@ void compute_shear_stress(output_data_struct* outDat, host_param_struct* hostDat
 	FILE* fPtr;
 	fPtr = fopen ("velocity_profile_z.txt","w");
 
-	int buffer = 0; // Additional buffer to add before starting finite-difference derivatives
+	int buffer = 1; // Additional buffer to add before starting finite-difference derivatives
 
-	float n_xy = (float)(n_x-2)*(n_y-2);
+	cl_float n_xy = (cl_float)(n_x-2)*(n_y-2);
 
-	float* uMeanX;
-	uMeanX = (float*)calloc(n_z,sizeof(float));
+	cl_float* uMeanX = calloc(n_z, sizeof(cl_float));
+	cl_float dudzMean = 0.0;
 	
 	// Forwards difference from lower and upper boundary
-	float dudzL = 0.0f, dudzU = 0.0f;
+	//cl_float dudzL = 0.0f;
+	//cl_float dudzU = 0.0f;
+	float dz = 4.0f;
 
 	for(int i_z=1; i_z < n_z-1; i_z++) {
-		//
-		float uMean[3] = {0.0f, 0.0f, 0.0f};
+
+		cl_float uMean[3] = {0.0f, 0.0f, 0.0f};
 		//
 		for(int i_x=1; i_x < n_x-1; i_x++) {
 			for(int i_y=1; i_y < n_y-1; i_y++) {
 
 				int i_1D = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*i_z);
-
+				
 				uMean[0] += u_h[i_1D];
 				uMean[1] += u_h[i_1D + n_L];
 				uMean[2] += u_h[i_1D + 2*n_L];
 
-				// Index, then velocity
-				//fprintf(vidPtr, "1 "); // Fluid nodes type 1
-				//fprintf(vidPtr, "%d %d %d ", i_x-1, i_y-1, i_z-1);
-				//fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", u_h[i_1D],  u_h[i_1D + n_L],  u_h[i_1D + 2*n_L]);
-
+				if (i_z == (1+dz+buffer)) {
+					//
+					int i_1D_fd = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*(i_z-dz));
+					dudzMean += (u_h[i_1D]-u_h[i_1D_fd])/dz;
+				}
+				else if (i_z == (n_z-2-buffer)) {
+					//
+					int i_1D_fd = i_x + intDat->LatticeSize[0]*(i_y + intDat->LatticeSize[1]*(i_z-dz));
+					dudzMean += (u_h[i_1D]-u_h[i_1D_fd])/dz;
+				}
 			}
 		}
 		uMean[0] /= n_xy; uMeanX[i_z] = uMean[0];
 		uMean[1] /= n_xy;
 		uMean[2] /= n_xy;
+		
 		fprintf(fPtr, "%8.6f %8.6f %8.6f\n", uMean[0], uMean[1], uMean[2]);
-		
-		
 
-		if (i_z == (3+buffer)) {
-			dudzL = 0.5f*(uMeanX[i_z]-uMeanX[i_z-2]);
-		}
-		else if (i_z == (n_z-2-buffer)) {
-			dudzU = 0.5f*(uMeanX[i_z]-uMeanX[i_z-2]);
-		}
 	}
+	
+	dudzMean /= (2.0*n_xy); // 2.0 because derivative at top and bottom wall were added
+	
 	// Output counter (for averaging)
 	int count = ++(outDat->ShearStressCount);
 	
 	// Average of upper and lower shear
-	float dudz = 0.5f*(dudzU + dudzL);
+	//cl_float dudz = 0.5f*(dudzU + dudzL);
+	
 			
-	outDat->ShearStressAvg = (outDat->ShearStressAvg*(count-1) + dudz)/count;
-	printf("Shear rate at wall = %f\n", outDat->ShearStressAvg);
+	outDat->ShearStressAvg = (outDat->ShearStressAvg*(count-1) + dudzMean)/count;
+	printf("Shear rate at wall = %e\n", outDat->ShearStressAvg);
 			
 	int intBuffer = (int)(flpDat->ParticleZBuffer + 1E-8); // 
 	int zbL = 1+intBuffer;
 	int zbU = (int)(n_z-2 - intBuffer);
 	
-	float actualShearRate = (uMeanX[zbU] - uMeanX[zbL])/(zbU-zbL);
+	cl_float actualShearRate = (uMeanX[zbU] - uMeanX[zbL])/(zbU-zbL);
 	//actualShearRate = abs(actualShearRate);
 		
-	outDat->ActualShearRate = (outDat->ActualShearRate*(outDat->ShearStressCount-1) + actualShearRate)/outDat->ShearStressCount;
-	printf("Shear rate in particle region = %f\n", outDat->ActualShearRate);
+	outDat->ActualShearRate = (outDat->ActualShearRate*(count-1) + actualShearRate)/count;
+	printf("Shear rate in particle region = %e\n", outDat->ActualShearRate);
 	
 	fclose(fPtr);
 }
@@ -749,10 +778,6 @@ void continuous_output(host_param_struct* hostDat, int_param_struct* intDat, cl_
 		fprintf(vidPtr, "%8.6f %8.6f %8.6f\n", parKin[p+n_par].x, parKin[p+n_par].y, parKin[p+n_par].z);
 
 	}
-
-
-	// Measure velocity gradient at wall
-
 
 }
 

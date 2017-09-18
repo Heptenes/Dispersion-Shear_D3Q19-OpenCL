@@ -6,8 +6,8 @@ fName = 'velocity_field_centerline.txt';
 
 dataRead = dlmread(fName);
 
-dataSize = [62 62];
-circLoc = [16 16];
+dataSize = [94 94];
+circLoc = [40 32];
 
 xSurf = reshape(dataRead(:,4),dataSize);
 ySurf = reshape(dataRead(:,5),dataSize);

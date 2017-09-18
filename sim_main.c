@@ -321,30 +321,37 @@ int main(int argc, char *argv[])
 			clEnqueueNDRangeKernel(queueGPU, kernelDat.collide_stream, 3,
 				gluid_kernel_work_offset, fluid_kernel_work_size, NULL, 0, NULL, NULL);
 		} */
+		
+		//printf("Checkpoint 1 \n\n");
 
 		// Kernel: LB collide and stream
 		clEnqueueNDRangeKernel(queueGPU, kernelDat.collide_stream, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
+			
+		//sclFinish(queueGPU);
 
 		// Kernel: Particle update
 		if (usingParticles) {
 			clEnqueueNDRangeKernel(queueCPU, kernelDat.particle_dynamics, 1,
 				NULL, &numParThreads, NULL, 0, NULL, NULL);
 
-			clFinish(queueCPU);
-			clFinish(queueGPU);
+			//clFinish(queueCPU);
 
 			// Kernel: Reset particle-fluid force array
 			clEnqueueNDRangeKernel(queueGPU, kernelDat.reset_particle_fluid_forces, 3,
 				lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 		}
+		
+		//printf("Checkpoint 2 \n\n");
 
 		// Kernel: Periodic stream
 		clEnqueueNDRangeKernel(queueGPU, kernelDat.boundary_periodic, 1,
 			NULL, &periodic_work_size, NULL, 0, NULL, NULL);
 
-		clFinish(queueGPU);
-		clFinish(queueCPU);
+		//clFinish(queueGPU);
+
+		
+		//printf("Checkpoint 3 \n\n");
 
 		// Kernel: LB velocity boundary
 		if (velBoundary) {
@@ -369,15 +376,18 @@ int main(int argc, char *argv[])
 			}
 			clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &wallAxis);
 			clSetKernelArg(kernelDat.boundary_velocity, 4, sizeof(cl_int), &calcRho);
-			clFinish(queueGPU);
+			//clFinish(queueGPU);
 		}
+		
+		clFinish(queueCPU);
+		//printf("Checkpoint 4 \n\n");
 
 		// Kernel: Particle-fluid forces
 		if (usingParticles) {
 			clEnqueueNDRangeKernel(queueGPU, kernelDat.particle_fluid_forces_linear_stencil, 1,
 				NULL, &numSurfPoints, &pointWorkSize, 0, NULL, NULL);
 
-			clFinish(queueGPU);
+			//clFinish(queueGPU);
 
 			// Kernel: Sum particle-fluid forces (acting on fluid)
 			clEnqueueNDRangeKernel(queueGPU, kernelDat.sum_particle_fluid_forces, 3,
@@ -387,13 +397,15 @@ int main(int argc, char *argv[])
 			clEnqueueNDRangeKernel(queueCPU, kernelDat.particle_particle_forces, 1,
 				NULL, &numParThreads, NULL, 0, NULL, NULL);
 		}
+		
+		//printf("Checkpoint 5 \n\n");
 
 		// Rebuild neighbour lists every intDat.RebuildFreq
 		if (usingParticles && t%hostDat.RebuildFreq == 0) {
 			
 			numParInZone_h = (cl_int*)clEnqueueMapBuffer(queueCPU, 
 				numParInZone_cl, CL_TRUE, CL_MAP_WRITE, 0, totalNumZones*sizeof(cl_int), 0, NULL, NULL, &err_cl);
-			error_check(err_cl, "clEnqueueMapBuffer", 1);
+			error_check(err_cl, "clEnqueueMapBuffer", 0);
 			
 			for (int i = 0; i < totalNumZones; i++) {
 				// Count is reset here because zones don't belong to threads
@@ -408,6 +420,8 @@ int main(int argc, char *argv[])
 			
 		}
 
+		clFinish(queueGPU);
+		//printf("Checkpoint 6 \n\n");
 		// Update dynamic parameters, e.g shear boundaries
 
 		// Produce video output and/or analysis
@@ -423,11 +437,13 @@ int main(int argc, char *argv[])
 		if (t > 3*intDat.MaxIterations/4 && t%hostDat.ShearStressFreq == 0) {
 			err_cl = clEnqueueReadBuffer(queueGPU, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 			err_cl = clEnqueueReadBuffer(queueGPU, tau_lb_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_lb_h, 0, NULL, NULL);
-			error_check(err_cl, "clEnqueueReadBuffer Shear stress", 0);
-
+			error_check(err_cl, "clEnqueueReadBuffer Shear stress", 1);
+			clFinish(queueGPU);
 			compute_shear_stress(&outDat, &hostDat, &intDat, &flpDat, u_h, tau_lb_h, t);
 
 		}
+		
+		//printf("Checkpoint 7 \n\n");
 
 	}
 	clFinish(queueGPU); 

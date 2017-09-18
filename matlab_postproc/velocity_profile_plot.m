@@ -8,7 +8,7 @@ dataRead = dlmread(['../' fName]);
 
 g = 0.00001;
             % x  y  
-systemSize = [6 6 126]; % Minus buffer layer
+systemSize = [94 94 94]; % Minus buffer layer
 
 profileDim = 3;
 velDim = 1;

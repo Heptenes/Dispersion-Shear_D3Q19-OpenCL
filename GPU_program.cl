@@ -98,7 +98,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 	int groupID = get_group_id(0);
 	int numGroups = get_num_groups(0);
 	
-	float4 sysSize = (float4)(intDat->SystemSize[0], intDat->SystemSize[1], intDat->SystemSize[2], 1.0f); 
+	float4 sysSize = (float4){intDat->SystemSize[0], intDat->SystemSize[1], intDat->SystemSize[2], 1.0f}; 
 	//printf("w = %f %f %f (%f)\n", w.x, w.y, w.z, w.w);
 	// .w is set to 1 to avoid nan when using fmod()
 
