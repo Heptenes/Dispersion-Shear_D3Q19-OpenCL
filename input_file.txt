@@ -1,8 +1,8 @@
-iterations                      1
+iterations                      100
 
-video_freq                      1000
+video_freq                      100
 fluid_ouput_spacing             4
-console_print_freq              100
+console_print_freq              5
 shear_stress_freq               50
 
 constant_body_force             0.0 0.0 0.0
@@ -17,25 +17,25 @@ boundary_conditions_xyz         0 0 1
 tangential_vel_bcs              0 0 0
 
 initial_f                       constant
-initial_vel                     0.0 0.0 0.0
+initial_vel                     0.1 0.0 0.0
 velocity_bc_upper               0.1 0.0 0.0
-velocity_bc_lower               -0.1 0.0 0.0
+velocity_bc_lower               0.1 0.0 0.0
 cpu_only_mode                   0
 
-domain_decomposition            6 1 1
+domain_decomposition            1 1 1
 
 num_particles                   216
 
-particle_diameter               9.1
+particle_diameter               8.0
 
 initial_particle_buffer         7.8
 
-z_wall_particle_buffer          12.0
+z_wall_particle_buffer          10.0
 
 initial_particle_distribution   2
 random_particle_shift           0.0
 
-rebuild_neigh_list_freq         40
+rebuild_neigh_list_freq         100
 
 surf_point_write_atomic         8
 

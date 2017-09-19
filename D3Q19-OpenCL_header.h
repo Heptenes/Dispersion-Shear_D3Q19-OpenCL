@@ -10,6 +10,8 @@
 #include <CL/cl.h>
 #endif
 
+#include "struct_header_host.h"
+
 #define TYPE_INT 0
 #define TYPE_FLOAT 1
 #define TYPE_INT_3VEC 2
@@ -25,9 +27,8 @@
 #define VISC_HB 3
 #define VISC_CASSON 4
 
-#define WORD_STRING_SIZE 64
+#define WORD_STRING_SIZE 128
 
-#define LB_Q 19
 
 #ifndef M_PI
 	#define M_PI 3.14159265358979323846
@@ -69,28 +70,25 @@
 	X(numParInThread_cl) 
 
 
-#include "struct_header_host.h"
-
-
 // Struct to contain information not accessed from within kernels
 typedef struct {
 
-	int ConsolePrintFreq;
+	cl_int ConsolePrintFreq;
 	char InitialDist[WORD_STRING_SIZE];
-	float InitialVel[3];
-	int InitialParticleDistribution;
-	float ParticleBuffer;
-	int InterpOrderIBM;
-	int DomainDecomp[3];
-	float ParticleDensity;
+	cl_float InitialVel[3];
+	cl_int InitialParticleDistribution;
+	cl_float ParticleBuffer;
+	cl_int InterpOrderIBM;
+	cl_int DomainDecomp[3];
+	cl_float ParticleDensity;
 	size_t WorkItemSizes[3];
 	size_t MaxWorkGroupSize;
-	int RebuildFreq;
-	int VideoFreq;
-	int FluidOutputSpacing;
-	int TangentialVelBC[3];
-	int ShearStressFreq;
-	float RandParticleShift;
+	cl_int RebuildFreq;
+	cl_int VideoFreq;
+	cl_int FluidOutputSpacing;
+	cl_int TangentialVelBC[3];
+	cl_int ShearStressFreq;
+	cl_float RandParticleShift;
 
 } host_param_struct;
 
@@ -101,10 +99,6 @@ typedef struct {
 #undef X
 } kernel_struct;
 
-typedef struct {
-	cl_command_queue kernel_queue;
-	cl_device_id kernel_device;
-} kernel_data_struct;
 
 typedef struct {
 

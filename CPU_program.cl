@@ -41,7 +41,7 @@ typedef struct {
 	int PointsPerParticle;
 	int PointsPerWorkGroup;
 	int TotalSurfPoints;
-	int NumForceArrays;
+	int WorkGroupsPerParticle;
 
 } int_param_struct;
 
@@ -195,7 +195,7 @@ __kernel void particle_dynamics(
 {
 	int threadID = get_global_id(0);
 	int np = intDat->NumParticles;
-	int nfa = intDat->NumForceArrays;
+	int nfa = intDat->WorkGroupsPerParticle;
 	
 	//printf("ThreadID = %d\n", threadID);
 	//printf("numParInThread[threadID] = %d\n", numParInThread[threadID]);

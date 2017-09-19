@@ -26,7 +26,7 @@ typedef struct {
 	int PointsPerParticle;
 	int PointsPerWorkGroup;
 	int TotalSurfPoints;
-	int NumForceArrays;
+	int WorkGroupsPerParticle;
 
 } int_param_struct;
 

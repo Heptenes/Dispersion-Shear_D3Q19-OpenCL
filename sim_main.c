@@ -23,8 +23,6 @@ int main(int argc, char *argv[])
 	
 	// Create programs
 	cl_program programCPU, programGPU;
-	//cl_program* programCPUptr = &programCPU;
-	//cl_program* programGPUptr = &programGPU;
 
 	// Create a command queue for CPU and GPU
 	cl_command_queue queueCPU, queueGPU;
@@ -51,7 +49,7 @@ int main(int argc, char *argv[])
 	}
 
 	// Read sphere surface discretization points
-	cl_float4* spherePoints;
+	cl_float4* spherePoints = NULL;
 	sphere_discretization(&intDat, &flpDat, &spherePoints);
 
 	// Build LB kernels
@@ -70,8 +68,14 @@ int main(int argc, char *argv[])
 
 	size_t fDataSize = numNodes*19*sizeof(cl_float);
 	size_t a3DataSize = numNodes*3*sizeof(cl_float);
-	//size_t parA3DataSize = intDat.NumParticles*3*sizeof(cl_float); // Array implementation
 	size_t parV4DataSize = intDat.NumParticles*sizeof(cl_float4);  // Vector type implementation
+	
+	printf("\nnumParThreads = %lu\n", (unsigned long)numParThreads);
+	printf("numSurfPoints = %lu\n", (unsigned long)numSurfPoints);
+	printf("pointWorkSize = %lu\n", (unsigned long)pointWorkSize);
+	printf("numNodes = %lu\n", (unsigned long)numNodes);
+	printf("intDat.NumParticles = %lu\n", (unsigned long)intDat.NumParticles);
+	printf("intDat.WorkGroupsPerParticle = %d\n\n", intDat.WorkGroupsPerParticle);
 
 	// --- HOST ARRAYS ---------------------------------------------------------
 	// Lattice fields
@@ -83,16 +87,16 @@ int main(int argc, char *argv[])
 	// Particle arrays
 	cl_float4* parKin_h = (cl_float4*)malloc(parV4DataSize*4); // x, vel, rot (quaternion), ang vel
 	cl_float4* parForce_h = (cl_float4*)malloc(parV4DataSize*2); // Force and torque
-	cl_float4* parFluidForce_h = (cl_float4*)malloc(parV4DataSize*intDat.NumForceArrays*2);
+	cl_float4* parFluidForce_h = (cl_float4*)malloc(parV4DataSize*intDat.WorkGroupsPerParticle*2);
 	cl_float4* parFluidForceSum_h = (cl_float4*)calloc(numSurfPoints*2, sizeof(cl_float4)); // Check this
 	//
-	cl_int* threadMembers_h = (cl_int*)malloc(numParThreads*intDat.NumParticles*sizeof(cl_int)); // Max; could reduce mem
+	cl_int* threadMembers_h = (cl_int*)malloc(numParThreads*intDat.NumParticles*sizeof(cl_int)); 
 	cl_int* numParInThread_h = (cl_int*)calloc(numParThreads, sizeof(cl_int));
 	//
 	cl_int* parsZone_h = (cl_int*)malloc(intDat.NumParticles*sizeof(cl_int));
-	cl_int* zoneMembers_h; // To be malloc'ed in initialize_particle_zones
-	cl_int* numParInZone_h;
-	cl_int* zoneNeighDat_h;
+	cl_int* zoneMembers_h = NULL; // To be malloc'ed in initialize_particle_zones
+	cl_int* numParInZone_h = NULL;
+	cl_int* zoneNeighDat_h = NULL;
 
 	// Initialization
 	initialize_lattice_fields(&hostDat, &intDat, &flpDat, f_h, gpf_h, u_h, tau_lb_h, countPoint_h);
@@ -101,10 +105,9 @@ int main(int argc, char *argv[])
 		threadMembers_h, numParInThread_h, &zoneNeighDat_h);
 		
 	size_t totalNumZones = intDat.NumZones[0]*intDat.NumZones[1]*intDat.NumZones[2];
-	printf("Total num zones = %lu\n", (unsigned long)totalNumZones);
 	
 	// Stream mapping for pbcs
-	cl_int* strMap;
+	cl_int* strMap = NULL;
 	cl_int numPeriodicNodes = create_periodic_stream_mapping(&intDat, &strMap);
 	printf("Periodic boundary nodes %d\n", numPeriodicNodes);
 	size_t smDataSize = numPeriodicNodes*2*sizeof(cl_int);
@@ -133,7 +136,7 @@ int main(int argc, char *argv[])
 	tau_lb_cl = clCreateBuffer(contextSim, CL_MEM_READ_WRITE, numNodes*sizeof(cl_float), NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer tau_lb_cl", 1);
 
-	// Particle arrays (host accessible)
+	// Particle arrays (host accessible memory)
 	parKin_cl = clCreateBuffer(contextSim, 
 		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, parV4DataSize*4, parKin_h, &err_cl);
 	error_check(err_cl, "clCreateBuffer parKin_cl", 1);
@@ -143,7 +146,7 @@ int main(int argc, char *argv[])
 	error_check(err_cl, "clCreateBuffer parForce_cl", 1);
 	
 	parFluidForce_cl = clCreateBuffer(contextSim, 
-		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, parV4DataSize*intDat.NumForceArrays*2, parFluidForce_h, &err_cl);
+		CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR | CL_MEM_ALLOC_HOST_PTR, parV4DataSize*intDat.WorkGroupsPerParticle*2, parFluidForce_h, &err_cl);
 	error_check(err_cl, "clCreateBuffer parFluidForce_cl", 1);
 	
 	parsZone_cl = clCreateBuffer(contextSim, 
@@ -186,17 +189,15 @@ int main(int argc, char *argv[])
 	spherePoints_cl = clCreateBuffer(contextSim, CL_MEM_READ_ONLY, intDat.PointsPerParticle*sizeof(cl_float4), NULL, &err_cl);
 	error_check(err_cl, "clCreateBuffer spherePoints_cl", 1);
 
-	// --- WRITE BUFFERS --------------------------------------------------------
-	err_cl = CL_SUCCESS;
+	// --- WRITE BUFFERS --------------------------------------------------------		
 	err_cl = clEnqueueWriteBuffer(queueGPU, fA_cl, CL_TRUE, 0, fDataSize, f_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(queueGPU, fB_cl, CL_TRUE, 0, fDataSize, f_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(queueGPU, u_cl, CL_TRUE, 0, a3DataSize, u_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(queueGPU, gpf_cl, CL_TRUE, 0, a3DataSize*intDat.MaxSurfPointsPerNode, gpf_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(queueGPU, countPoint_cl, CL_TRUE, 0, numNodes*sizeof(cl_int), countPoint_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(queueGPU, tau_lb_cl, CL_TRUE, 0, numNodes*sizeof(cl_float), tau_lb_h, 0, NULL, NULL);
-
 	error_check(err_cl, "clEnqueueWriteBuffer 1", 1);
-	err_cl = CL_SUCCESS;
+	
 	err_cl |= clEnqueueWriteBuffer(queueGPU, parFluidForceSum_cl, CL_TRUE, 0, numSurfPoints*sizeof(cl_float4)*2, parFluidForceSum_h, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(queueGPU, spherePoints_cl, CL_TRUE, 0, intDat.PointsPerParticle*sizeof(cl_float4), spherePoints, 0, NULL, NULL);
 	err_cl |= clEnqueueWriteBuffer(queueGPU, strMap_cl, CL_TRUE, 0, smDataSize, strMap, 0, NULL, NULL);
@@ -217,8 +218,10 @@ int main(int argc, char *argv[])
 	// Work sizes
 	int velBoundary=0;
 	for (int dim=0; dim<3; dim++) {
+		//
 		global_work_size[dim] = intDat.LatticeSize[dim] - 2;
-
+		printf("global_work_size[%d] = %lu\n", dim, (unsigned long)global_work_size[dim]);
+		//
 		if (intDat.BoundaryConds[dim] == 1) {
 			velBC_work_size[dim] = 2; // This is the velocity boundary pair
 			wallAxis = dim;
@@ -323,31 +326,31 @@ int main(int argc, char *argv[])
 			err_cl |= clSetKernelArg(kernelDat.collide_stream, 1, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fB_cl);
-			//error_check(err_cl, "clSetKernelArg", 1);
+			error_check(err_cl, "clSetKernelArg", 0);
 		}
 		else {
 			err_cl  = clSetKernelArg(kernelDat.collide_stream, 0, memSize, &fB_cl);
 			err_cl |= clSetKernelArg(kernelDat.collide_stream, 1, memSize, &fA_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_velocity, 0, memSize, &fA_cl);
 			err_cl |= clSetKernelArg(kernelDat.boundary_periodic, 0, memSize, &fA_cl);
-			//error_check(err_cl, "clSetKernelArg", 1);
+			error_check(err_cl, "clSetKernelArg", 0);
 		}
 
-		/* Kernel: LB collide and stream
-		for (size_t i_k = 0; i_k < splitKernelSize; i_k++) {
+		// Kernel: LB collide and stream
+		//for (size_t i_k = 0; i_k < splitKernelSize; i_k++) {
 
-			fluid_kernel_work_size[0] = global_work_size[0]/splitKernelSize;
-			fluid_kernel_work_size[1] = global_work_size[1];
-			fluid_kernel_work_size[2] = global_work_size[2];
-			fluid_kernel_work_offset[0] = lattice_work_offset[0] + i_k*global_work_size[0]/splitKernelSize;
-			fluid_kernel_work_offset[1] = lattice_work_offset[1];
-			fluid_kernel_work_offset[2] = lattice_work_offset[2];
-			printf("Fluid kernel with global size %d %d %d\n", (int)fluid_kernel_work_size[0], (int)fluid_kernel_work_size[1], (int)fluid_kernel_work_size[2]);
-			printf("and work offset %d %d %d\n", (int)fluid_kernel_work_offset[0], (int)fluid_kernel_work_offset[1], (int)fluid_kernel_work_offset[2]);
+		//	fluid_kernel_work_size[0] = global_work_size[0]/splitKernelSize;
+		//	fluid_kernel_work_size[1] = global_work_size[1];
+		//	fluid_kernel_work_size[2] = global_work_size[2];
+		//	fluid_kernel_work_offset[0] = lattice_work_offset[0] + i_k*global_work_size[0]/splitKernelSize;
+		//	fluid_kernel_work_offset[1] = lattice_work_offset[1];
+		//	fluid_kernel_work_offset[2] = lattice_work_offset[2];
+		//	printf("Fluid kernel with global size %d %d %d\n", (int)fluid_kernel_work_size[0], (int)fluid_kernel_work_size[1], (int)fluid_kernel_work_size[2]);
+		//	printf("and work offset %d %d %d\n", (int)fluid_kernel_work_offset[0], (int)fluid_kernel_work_offset[1], (int)fluid_kernel_work_offset[2]);
 
-			clEnqueueNDRangeKernel(queueGPU, kernelDat.collide_stream, 3,
-				gluid_kernel_work_offset, fluid_kernel_work_size, NULL, 0, NULL, NULL);
-		} */
+		//	clEnqueueNDRangeKernel(queueGPU, kernelDat.collide_stream, 3,
+		//		gluid_kernel_work_offset, fluid_kernel_work_size, NULL, 0, NULL, NULL);
+		//} 
 		
 		//printf("Checkpoint 1 \n\n");
 
@@ -355,7 +358,6 @@ int main(int argc, char *argv[])
 		clEnqueueNDRangeKernel(queueGPU, kernelDat.collide_stream, 3,
 			lattice_work_offset, global_work_size, NULL, 0, NULL, NULL);
 			
-		//sclFinish(queueGPU);
 
 		// Kernel: Particle update
 		if (usingParticles) {
@@ -374,9 +376,6 @@ int main(int argc, char *argv[])
 		// Kernel: Periodic stream
 		clEnqueueNDRangeKernel(queueGPU, kernelDat.boundary_periodic, 1,
 			NULL, &periodic_work_size, NULL, 0, NULL, NULL);
-
-		//clFinish(queueGPU);
-
 		
 		//printf("Checkpoint 3 \n\n");
 
@@ -403,7 +402,6 @@ int main(int argc, char *argv[])
 			}
 			clSetKernelArg(kernelDat.boundary_velocity, 3, sizeof(cl_int), &wallAxis);
 			clSetKernelArg(kernelDat.boundary_velocity, 4, sizeof(cl_int), &calcRho);
-			//clFinish(queueGPU);
 		}
 		
 		clFinish(queueCPU);
@@ -443,13 +441,11 @@ int main(int argc, char *argv[])
 			clFinish(queueCPU);
 			clEnqueueNDRangeKernel(queueCPU, kernelDat.update_particle_zones, 1,
 				NULL, &numParThreads, NULL, 0, NULL, NULL);
-			clFinish(queueCPU);
 			
 		}
 
 		clFinish(queueGPU);
 		//printf("Checkpoint 6 \n\n");
-		// Update dynamic parameters, e.g shear boundaries
 
 		// Produce video output and/or analysis
 		if (t%hostDat.VideoFreq == 0) {
@@ -472,9 +468,9 @@ int main(int argc, char *argv[])
 		
 		//printf("Checkpoint 7 \n\n");
 
-	}
+	} 
 	clFinish(queueGPU); 
-	clFinish(queueCPU);
+	clFinish(queueCPU); 
 	printf("Checkpoint: end of simulation loop\n");
 
 	// --- COPY DATA TO HOST ---------------------------------------------------
@@ -488,11 +484,11 @@ int main(int argc, char *argv[])
 	if (usingParticles) {
 		
 		parFluidForce_h = (cl_float4*)clEnqueueMapBuffer(queueCPU, 
-			parFluidForce_cl, CL_TRUE, CL_MAP_READ, 0, parV4DataSize*intDat.NumForceArrays*2, 0, NULL, NULL, &err_cl);
+			parFluidForce_cl, CL_TRUE, CL_MAP_READ, 0, parV4DataSize*intDat.WorkGroupsPerParticle*2, 0, NULL, NULL, &err_cl);
 		error_check(err_cl, "clEnqueueMapBuffer", 1);
 		
-		float finalForce[3] = {0.0, 0.0, 0.0};
-		for (int i_fa = 0; i_fa < intDat.NumForceArrays; i_fa++) {
+		cl_float finalForce[3] = {0.0, 0.0, 0.0};
+		for (int i_fa = 0; i_fa < intDat.WorkGroupsPerParticle; i_fa++) {
 			finalForce[0] += parFluidForce_h[i_fa].x;
 			finalForce[1] += parFluidForce_h[i_fa].y;
 			finalForce[2] += parFluidForce_h[i_fa].z;
@@ -517,15 +513,15 @@ int main(int argc, char *argv[])
 
 	printf("Checkpoint: end of sim_main\n");
 	
-	
 	/* Clean-up
 	clReleaseCommandQueue(queueCPU);
 	clReleaseCommandQueue(queueGPU);
-	clReleaseProgram(programCPU);
-	clReleaseProgram(programGPU);
 	clReleaseDevice(deviceArr[0]);
 	clReleaseDevice(deviceArr[1]);
-	clReleaseContext(contextSim); */
-	
+	clReleaseProgram(programCPU);
+	clReleaseProgram(programGPU);
+
+	clReleaseContext(contextSim); 
+	*/
 	return 0;
 }

@@ -41,7 +41,7 @@ typedef struct {
 	int PointsPerParticle;
 	int PointsPerWorkGroup;
 	int TotalSurfPoints;
-	int NumForceArrays;
+	int WorkGroupsPerParticle;
 
 } int_param_struct;
 
@@ -248,7 +248,7 @@ __kernel void particle_fluid_forces_linear_stencil(
 		parFluidForce[groupID] = parFluidForceSum[globalID]; // Return summed force
 		parFluidForce[groupID + numGroups] = parFluidForceSum[globalID + globalSize]; // Summed torque
 
-		printf("Force return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID, globalID);
+		//printf("Force return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID, globalID);
 		//printf("= %f %f %f\n", parFluidForce[groupID].x, parFluidForce[groupID].y, parFluidForce[groupID].z);
 		//printf("Torque return: parFluidForce[%d] = parFluidForceSum[%d]\n", groupID + numGroups, globalID + globalSize);
 		//printf("= %f %f %f\n\n", parFluidForce[groupID + numGroups].x, parFluidForce[groupID + numGroups].y, parFluidForce[groupID + numGroups].z);

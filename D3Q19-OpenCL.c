@@ -17,8 +17,12 @@ int initialize_data(int_param_struct* intDat, flp_param_struct* flpDat, host_par
 	1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 
 	1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f, 1.0f/36.0f};
 
-	memcpy(intDat->BasisVel, BasisVelD3Q19, sizeof(BasisVelD3Q19));
-	memcpy(flpDat->EqWeights, EqWeightsD3Q19, sizeof(EqWeightsD3Q19));
+	for (int q = 0; q < 19; q++) {
+		flpDat->EqWeights[q] = EqWeightsD3Q19[q];
+		for (int d = 0; d < 3; d++) {
+			intDat->BasisVel[q][d] = BasisVelD3Q19[q][d];
+		}
+	}
 
 	// Variable/input data
 	FILE *ifp;
@@ -123,13 +127,13 @@ void initialize_lattice_fields(host_param_struct* hostDat, int_param_struct* int
 		printf("System size in dimension %d = %d\n", dim, intDat->SystemSize[dim]);
 	}
 
-	if (strstr(hostDat->InitialDist, "poiseuille") != NULL)
-	{
+	if (strstr(hostDat->InitialDist, "poiseuille") != NULL) {
 		// Do something
 		perror("poiseuille starting profile not supported yet");
+		exit(0);
 	}
-	else if (strstr(hostDat->InitialDist, "constant") != NULL)
-	{
+	else if (strstr(hostDat->InitialDist, "constant") != NULL) {
+		//
 		float vel[3];
 		float f_eq[19];
 		vel[0] = hostDat->InitialVel[0];
@@ -194,10 +198,8 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	flpDat->ParticleMomInertia = 0.1f*flpDat->ParticleMass*flpDat->ParticleDiam*flpDat->ParticleDiam;
 	printf("Mass = %f, moment of inertia = %f\n", flpDat->ParticleMass, flpDat->ParticleMomInertia);
 
-	intDat->NumForceArrays = (cl_int)ceil((float)intDat->PointsPerParticle/(float)intDat->PointsPerWorkGroup);
-
 	printf("\nNumber of particle force arrays needed = %d, (%d points, max %d per work group).\n\n",
-		intDat->NumForceArrays, intDat->PointsPerParticle, intDat->PointsPerWorkGroup);
+		intDat->WorkGroupsPerParticle, intDat->PointsPerParticle, intDat->PointsPerWorkGroup);
 
 	int np = intDat->NumParticles;
 
@@ -239,9 +241,9 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 	}
 	else if (hostDat->InitialParticleDistribution == 2){
 		// NxNxM Lattice
-		float pb = hostDat->ParticleBuffer;
-		float wN = intDat->SystemSize[0]-2*pb;
-		float wM = intDat->SystemSize[2]-2*(pb+flpDat->ParticleZBuffer);
+		cl_float pb = hostDat->ParticleBuffer;
+		cl_float wN = intDat->SystemSize[0]-2*pb;
+		cl_float wM = intDat->SystemSize[2]-2*(pb+flpDat->ParticleZBuffer);
 
 		int mdn = (int)ceil(wM/wN);
 
@@ -253,11 +255,11 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		int m = n*mdn;
 		printf("Choosing a %d x %d x %d lattice, max %d particles.\n", n, n, m, npl);
 
-		float sp[3]; // Spacing
+		cl_float sp[3]; // Spacing
 		if (np > 1) {
-				sp[0] = (intDat->SystemSize[0] - 2*pb)/(n-1);
-				sp[1] = (intDat->SystemSize[1] - 2*pb)/(n-1);
-				sp[2] = (intDat->SystemSize[2] - 2*(pb + flpDat->ParticleZBuffer))/(n*mdn-1);
+				sp[0] = (intDat->SystemSize[0] - 2.0f*pb)/(n-1.0f);
+				sp[1] = (intDat->SystemSize[1] - 2.0f*pb)/(n-1.0f);
+				sp[2] = (intDat->SystemSize[2] - 2.0f*(pb + flpDat->ParticleZBuffer))/(n*mdn-1.0f);
 		}
 		else {
 			for (int i = 0; i < 3; i++) {
@@ -281,11 +283,11 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 				int safePos = 1;
 				for(int p2 = 0; p2 < p; p2++) {
 					
-					float rijX = parKinematics[p2].x - testPos.x;
-					float rijY = parKinematics[p2].y - testPos.y;
-					float rijZ = parKinematics[p2].z - testPos.z;
+					cl_float rijX = parKinematics[p2].x - testPos.x;
+					cl_float rijY = parKinematics[p2].y - testPos.y;
+					cl_float rijZ = parKinematics[p2].z - testPos.z;
 					
-					float sepSq = rijX*rijX +  rijY*rijY +  rijZ*rijZ;
+					cl_float sepSq = rijX*rijX +  rijY*rijY +  rijZ*rijZ;
 					
 					if (sepSq < flpDat->ParticleDiam*flpDat->ParticleDiam) {
 						safePos = 0;
@@ -309,9 +311,9 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 			perror("Error: Single-particle initial distribution chosen with more than 1 particle.");
 		}
 		// Position and velocity
-		float px = hostDat->ParticleBuffer;
-		float py = ((float)intDat->SystemSize[1])/2.0f;
-		float pz = ((float)intDat->SystemSize[2])/2.0f;
+		cl_float px = hostDat->ParticleBuffer;
+		cl_float py = ((cl_float)intDat->SystemSize[1])/2.0f;
+		cl_float pz = ((cl_float)intDat->SystemSize[2])/2.0f;
 		parKinematics[0] = (cl_float4){{px, py, pz, 0.0f}};
 		parKinematics[1] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 		printf("Placing single particle at position %f %f %f\n", px, py, pz);
@@ -331,7 +333,7 @@ void initialize_particle_fields(host_param_struct* hostDat, int_param_struct* in
 		parForce[p     ] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 		parForce[p + np] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}};
 
-		for (int fa = 0; fa < intDat->NumForceArrays; fa++) {
+		for (int fa = 0; fa < intDat->WorkGroupsPerParticle; fa++) {
 			parFluidForce[p + np*(2*fa)    ] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}}; // Force
 			parFluidForce[p + np*(2*fa + 1)] = (cl_float4){{0.0f, 0.0f, 0.0f, 0.0f}}; // Torque
 		}
@@ -398,11 +400,14 @@ void initialize_particle_zones(host_param_struct* hostDat, int_param_struct* int
 		int zoneIDy = (int)(parKinematics[p].y/flpDat->ZoneWidth[1]);
 		int zoneIDz = (int)(parKinematics[p].z/flpDat->ZoneWidth[2]);
 		int zoneID = zoneIDx + intDat->NumZones[0]*(zoneIDy + intDat->NumZones[1]*zoneIDz);
+		
+		if (zoneID >= totalNumZones) {
+			perror("\nError: Particle out of bounds at zone initialization\n\n");
+			exit(0);
+		}
 
 		parsZone[p] = zoneID;
-		
-		//printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID],
-		//	zoneID, zoneIDx, zoneIDy, zoneIDz);
+		//printf("Particle %d is %d'th particle of zone %d (%d,%d,%d).\n", p, (*numParInZone)[zoneID], zoneID, zoneIDx, zoneIDy, zoneIDz);
 		
 		(*zoneMembers)[zoneID*intDat->NumParticles + (*numParInZone)[zoneID]++] = p;
 
@@ -541,8 +546,9 @@ int create_LB_kernels(int_param_struct* intDat, kernel_struct* kernelDat, cl_con
 	printf("Max work group size of fluid-particle kernel = %d.\n", workSize);
 
 	intDat->PointsPerWorkGroup = workSize > intDat->PointsPerParticle ? intDat->PointsPerParticle : workSize;
-
-
+	
+	intDat->WorkGroupsPerParticle = (cl_int)ceil(intDat->PointsPerParticle/intDat->PointsPerWorkGroup);
+	
 	//clReleaseProgram(programCPU);
 	//clReleaseProgram(programGPU);
 
@@ -588,6 +594,11 @@ void sphere_discretization(int_param_struct* intDat, flp_param_struct* flpDat, c
 
 	for(int n=0; n<numPoints; n++) {
 		fscanf(fs, "%f,%f,%f\n", &px, &py, &pz);
+		float lenSq = px*px + py*py + pz*pz;
+		if ( !(lenSq < 1.01 && lenSq > 0.99) ) {
+			perror("\nError: malformed coordinates read in sphere discretization\n\n");
+			exit(0);
+		}
 		px *= 0.5f*flpDat->ParticleDiam; // Scale points (from unit sphere) by particle radius
 		py *= 0.5f*flpDat->ParticleDiam;
 		pz *= 0.5f*flpDat->ParticleDiam;
@@ -655,7 +666,6 @@ int process_input_line(char* fLine, input_data_struct* inputDefaults, int inputD
 
 	return 0;
 }
-
 
 void compute_shear_stress(output_data_struct* outDat, host_param_struct* hostDat, int_param_struct* intDat, flp_param_struct* flpDat,
 	cl_float* u_h, cl_float* tau_lb_h, int frame)
@@ -1137,7 +1147,6 @@ int equilibrium_distribution_D3Q19(float rho, float* vel, float* f_eq)
 
 	return 0;
 }
-
 
 void read_program_source(char** programSourcePtr, const char* programName)
 {
